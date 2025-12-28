@@ -1,0 +1,6 @@
+node_modules/
+.env
+database/
+public/certificates/*.pdf
+*.log
+.DS_Store

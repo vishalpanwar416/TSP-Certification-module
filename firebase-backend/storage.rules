@@ -1,0 +1,10 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Certificates folder - Allow all for now (add auth later)
+    match /certificates/{certificateId} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}

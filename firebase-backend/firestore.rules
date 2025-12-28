@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Certificates collection - Allow all for now (add auth later)
+    match /certificates/{certificateId} {
+      allow read, write: if true;
+    }
+    
+    // Statistics collection
+    match /stats/{statId} {
+      allow read: if true;
+      allow write: if false; // Only Cloud Functions can write
+    }
+  }
+}

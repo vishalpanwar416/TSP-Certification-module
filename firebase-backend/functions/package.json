@@ -1,0 +1,28 @@
+{
+    "name": "certificate-generator-functions",
+    "version": "1.0.0",
+    "description": "Cloud Functions for Certificate Generator",
+    "main": "index.js",
+    "scripts": {
+        "build": "echo 'No build needed'",
+        "serve": "firebase emulators:start --only functions",
+        "shell": "firebase functions:shell",
+        "deploy": "firebase deploy --only functions",
+        "logs": "firebase functions:log"
+    },
+    "engines": {
+        "node": "18"
+    },
+    "dependencies": {
+        "firebase-admin": "^12.0.0",
+        "firebase-functions": "^4.5.0",
+        "express": "^4.18.2",
+        "cors": "^2.8.5",
+        "puppeteer": "^21.6.1",
+        "twilio": "^4.19.0",
+        "uuid": "^9.0.1"
+    },
+    "devDependencies": {
+        "firebase-functions-test": "^3.1.0"
+    }
+}
