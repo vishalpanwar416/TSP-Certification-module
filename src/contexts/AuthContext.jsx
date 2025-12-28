@@ -4,23 +4,54 @@ import {
     signOut,
     onAuthStateChanged,
     GoogleAuthProvider,
-    signInWithPopup
+    signInWithPopup,
+    signInWithRedirect,
+    getRedirectResult
 } from 'firebase/auth';
 import { auth } from '../config/firebase';
 
-const AuthContext = createContext({});
+const AuthContext = createContext(null);
 
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = () => {
+    const context = useContext(AuthContext);
+    if (!context) {
+        throw new Error('useAuth must be used within an AuthProvider');
+    }
+    return context;
+};
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
 
+    // Verify auth is available
+    if (!auth) {
+        console.error('Firebase Auth is not initialized!');
+        setLoading(false);
+    }
+
     useEffect(() => {
+        if (!auth) {
+            console.error('Cannot initialize auth state - auth object is missing');
+            setLoading(false);
+            return;
+        }
+
         const unsubscribe = onAuthStateChanged(auth, (user) => {
             setUser(user);
             setLoading(false);
         });
+
+        // Check for redirect result on mount
+        getRedirectResult(auth)
+            .then((result) => {
+                if (result) {
+                    setUser(result.user);
+                }
+            })
+            .catch((error) => {
+                console.error('Redirect sign-in error:', error);
+            });
 
         return unsubscribe;
     }, []);
@@ -29,9 +60,37 @@ export const AuthProvider = ({ children }) => {
         return signInWithEmailAndPassword(auth, email, password);
     };
 
-    const loginWithGoogle = () => {
+    const loginWithGoogle = async (useRedirect = false) => {
         const provider = new GoogleAuthProvider();
-        return signInWithPopup(auth, provider);
+        // Add additional scopes if needed
+        provider.addScope('profile');
+        provider.addScope('email');
+        // Set custom parameters
+        provider.setCustomParameters({
+            prompt: 'select_account'
+        });
+
+        try {
+            if (useRedirect) {
+                // Use redirect method (works better with popup blockers)
+                await signInWithRedirect(auth, provider);
+                // Note: The result will be handled by getRedirectResult in useEffect
+                return Promise.resolve();
+            } else {
+                // Try popup first
+                return await signInWithPopup(auth, provider);
+            }
+        } catch (error) {
+            // If popup is blocked, automatically fallback to redirect
+            if (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user') {
+                if (!useRedirect) {
+                    // Retry with redirect
+                    await signInWithRedirect(auth, provider);
+                    return Promise.resolve();
+                }
+            }
+            throw error;
+        }
     };
 
     const logout = () => {
@@ -45,6 +104,11 @@ export const AuthProvider = ({ children }) => {
         loginWithGoogle,
         logout
     };
+
+    // Debug: Verify loginWithGoogle is defined
+    if (typeof loginWithGoogle !== 'function') {
+        console.error('loginWithGoogle is not a function!', { loginWithGoogle, value });
+    }
 
     return (
         <AuthContext.Provider value={value}>

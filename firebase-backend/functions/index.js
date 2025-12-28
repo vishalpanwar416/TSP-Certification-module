@@ -5,6 +5,7 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const { generateCertificatePDF } = require('./utils/pdfGenerator');
 const { sendCertificateLinkViaWhatsApp, isWhatsAppConfigured } = require('./utils/whatsappService');
+const { sendCertificateViaEmail, isEmailConfigured } = require('./utils/emailService');
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -316,6 +317,87 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
         console.error('Error sending certificate via WhatsApp:', error);
         res.status(500).json({
             error: 'Failed to send certificate via WhatsApp',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Send certificate via Email
+ */
+app.post('/certificates/:id/send-email', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { email } = req.body;
+
+        // Check if Email is configured
+        if (!isEmailConfigured()) {
+            return res.status(503).json({
+                error: 'Email service is not configured. Please set up email credentials.',
+                configured: false
+            });
+        }
+
+        const doc = await db.collection('certificates').doc(id).get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Certificate not found' });
+        }
+
+        const certificate = { id: doc.id, ...doc.data() };
+        const recipientEmail = email || certificate.email;
+
+        if (!recipientEmail) {
+            return res.status(400).json({
+                error: 'Email address is required'
+            });
+        }
+
+        // Send via Email
+        const result = await sendCertificateViaEmail(
+            recipientEmail,
+            certificate.pdf_url,
+            certificate
+        );
+
+        res.json({
+            success: true,
+            message: 'Certificate sent via email successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error sending certificate via email:', error);
+        res.status(500).json({
+            error: 'Failed to send certificate via email',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Download certificate PDF
+ */
+app.get('/certificates/:id/download', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const doc = await db.collection('certificates').doc(id).get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Certificate not found' });
+        }
+
+        const certificate = { id: doc.id, ...doc.data() };
+
+        if (!certificate.pdf_url) {
+            return res.status(404).json({ error: 'Certificate PDF not found' });
+        }
+
+        // Redirect to the public URL
+        res.redirect(certificate.pdf_url);
+    } catch (error) {
+        console.error('Error downloading certificate:', error);
+        res.status(500).json({
+            error: 'Failed to download certificate',
             details: error.message
         });
     }

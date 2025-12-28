@@ -1,5 +1,4 @@
 import {
-    Award,
     LayoutDashboard,
     FileText,
     Send,
@@ -27,7 +26,15 @@ function Sidebar({ activeTab, setActiveTab }) {
         <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
             <div className="sidebar-header">
                 <div className="sidebar-logo">
-                    <Award size={32} color="#d32f2f" />
+                    <img 
+                        src="/logo.svg" 
+                        alt="Company Logo" 
+                        style={{
+                            width: '32px',
+                            height: '32px',
+                            objectFit: 'contain'
+                        }}
+                    />
                     {!isCollapsed && <span className="sidebar-brand">CertSender</span>}
                 </div>
                 <button

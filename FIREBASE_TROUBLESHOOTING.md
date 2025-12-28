@@ -6,6 +6,66 @@ Your Firebase project needs some APIs enabled. Here's how to fix it:
 
 ---
 
+## 🔐 Google Authentication Troubleshooting
+
+### Common Issues and Solutions
+
+#### Issue 1: "Popup blocked" or "Popup closed by user"
+**Solution:** The code now automatically falls back to redirect method if popup is blocked.
+
+#### Issue 2: "Unauthorized domain"
+**Solution:** Add your domain to Firebase Console:
+1. Go to: https://console.firebase.google.com/project/channel-partner-54334/authentication/settings
+2. Scroll to **"Authorized domains"**
+3. Click **"Add domain"**
+4. Add:
+   - `localhost` (for local development)
+   - Your production domain (e.g., `yourdomain.com`)
+   - Your Vercel domain (if deployed)
+
+#### Issue 3: "Operation not allowed"
+**Solution:** Enable Google Sign-In provider:
+1. Go to: https://console.firebase.google.com/project/channel-partner-54334/authentication/providers
+2. Click on **"Google"**
+3. Toggle **"Enable"** to ON
+4. Enter your **Support email** (required)
+5. Click **"Save"**
+
+#### Issue 4: OAuth consent screen not configured
+**Solution:** Configure OAuth consent screen:
+1. Go to: https://console.cloud.google.com/apis/credentials/consent?project=channel-partner-54334
+2. Fill in required fields:
+   - App name
+   - User support email
+   - Developer contact email
+3. Add scopes: `email`, `profile`, `openid`
+4. Save and continue
+
+#### Issue 5: API not enabled
+**Solution:** Enable Google+ API:
+1. Go to: https://console.cloud.google.com/apis/library?project=channel-partner-54334
+2. Search for "Google+ API" or "Identity Toolkit API"
+3. Click **"Enable"**
+
+### Testing Google Authentication
+
+1. **Check browser console** for specific error messages
+2. **Try in incognito mode** to rule out extension interference
+3. **Check popup blocker settings** in your browser
+4. **Verify Firebase config** matches your project
+
+### What Was Fixed
+
+✅ Added automatic fallback from popup to redirect method
+✅ Added better error handling with user-friendly messages
+✅ Added proper Google Auth Provider configuration
+✅ Added redirect result handling
+✅ Added scope configuration (email, profile)
+
+---
+
+---
+
 ## 🔧 Step-by-Step Fix
 
 ### Step 1: Go to Firebase Console

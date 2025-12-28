@@ -9,8 +9,10 @@ import {
     CheckCircle,
     Clock,
     FileText,
-    LogOut
+    LogOut,
+    FileSpreadsheet
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { certificateAPI } from '../services/api';
 import CreateCertificateModal from './CreateCertificateModal';
 import SendWhatsAppModal from './SendWhatsAppModal';
@@ -32,10 +34,14 @@ function Dashboard() {
         try {
             setLoading(true);
             const response = await certificateAPI.getAll();
-            setCertificates(response.data || []);
+            // API service now returns the data directly (already unwrapped)
+            const certificates = Array.isArray(response) ? response : [];
+            setCertificates(certificates);
         } catch (error) {
             console.error('Error fetching certificates:', error);
-            alert('Failed to load certificates');
+            const errorMessage = error.response?.data?.error || error.message || 'Failed to load certificates';
+            const detailedMessage = `Failed to load certificates: ${errorMessage}\n\nMake sure the backend server is running on http://localhost:5000`;
+            alert(detailedMessage);
         } finally {
             setLoading(false);
         }
@@ -45,9 +51,16 @@ function Dashboard() {
     const fetchStats = async () => {
         try {
             const response = await certificateAPI.getStats();
-            setStats(response.data || { total: 0, whatsapp_sent: 0, pending: 0 });
+            // API service now returns the data directly (already unwrapped)
+            const statsData = response || {};
+            setStats({
+                total: statsData.total || 0,
+                whatsapp_sent: statsData.whatsapp_sent || 0,
+                pending: statsData.pending || 0
+            });
         } catch (error) {
             console.error('Error fetching stats:', error);
+            // Don't show alert for stats, just log the error
         }
     };
 
@@ -117,6 +130,50 @@ function Dashboard() {
         }
     };
 
+    // Export to Excel
+    const handleExportToExcel = () => {
+        if (certificates.length === 0) {
+            alert('No certificates to export');
+            return;
+        }
+
+        try {
+            // Prepare data with only the required fields
+            const excelData = certificates.map(cert => ({
+                'Name': cert.recipient_name || '',
+                'RERA Awarde No.': cert.award_rera_number || '',
+                'Certificate Number': cert.certificate_number || '',
+                'Professional': cert.description || '' // Using description as Professional field
+            }));
+
+            // Create workbook and worksheet
+            const worksheet = XLSX.utils.json_to_sheet(excelData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'Certificates');
+
+            // Set column widths
+            const columnWidths = [
+                { wch: 30 }, // Name
+                { wch: 20 }, // RERA Awarde No.
+                { wch: 20 }, // Certificate Number
+                { wch: 40 }  // Professional
+            ];
+            worksheet['!cols'] = columnWidths;
+
+            // Generate filename with current date
+            const date = new Date().toISOString().split('T')[0];
+            const filename = `Certificates_${date}.xlsx`;
+
+            // Download the file
+            XLSX.writeFile(workbook, filename);
+            
+            alert(`Exported ${certificates.length} certificate(s) to ${filename}`);
+        } catch (error) {
+            console.error('Error exporting to Excel:', error);
+            alert('Failed to export to Excel. Please try again.');
+        }
+    };
+
     return (
         <div className="dashboard">
             {/* Header */}
@@ -156,6 +213,25 @@ function Dashboard() {
                             </p>
                         </div>
                         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                            <button
+                                className="btn"
+                                style={{
+                                    background: 'rgba(255,255,255,0.2)',
+                                    color: 'white',
+                                    border: '1px solid rgba(255,255,255,0.3)',
+                                    fontWeight: '600',
+                                    padding: '0.75rem 1.5rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem'
+                                }}
+                                onClick={handleExportToExcel}
+                                title="Export to Excel"
+                                disabled={certificates.length === 0}
+                            >
+                                <FileSpreadsheet size={20} />
+                                Export Excel
+                            </button>
                             <button
                                 className="btn"
                                 style={{
