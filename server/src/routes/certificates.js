@@ -6,6 +6,7 @@ import {
     updateCertificate,
     deleteCertificate,
     sendCertificateWhatsApp,
+    sendCertificateEmail,
     getCertificateStats,
     downloadCertificate
 } from '../controllers/certificateController.js';
@@ -23,6 +24,7 @@ router.delete('/:id', deleteCertificate);
 
 // Certificate actions
 router.post('/:id/send-whatsapp', sendCertificateWhatsApp);
+router.post('/:id/send-email', sendCertificateEmail);
 router.get('/:id/download', downloadCertificate);
 
 export default router;

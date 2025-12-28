@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import Certificate from '../models/Certificate.js';
 import { generateCertificatePDF } from '../utils/pdfGenerator.js';
 import { sendCertificateLinkViaWhatsApp, isWhatsAppConfigured } from '../utils/whatsappService.js';
+import { sendCertificateViaEmail, isEmailConfigured } from '../utils/emailService.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -288,6 +289,55 @@ export const downloadCertificate = async (req, res) => {
     }
 };
 
+/**
+ * Send certificate via Email
+ */
+export const sendCertificateEmail = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { email } = req.body;
+
+        // Check if Email is configured
+        if (!isEmailConfigured()) {
+            return res.status(503).json({
+                error: 'Email service is not configured. Please set up email credentials in .env file.',
+                configured: false
+            });
+        }
+
+        const certificate = Certificate.findById(id);
+        if (!certificate) {
+            return res.status(404).json({ error: 'Certificate not found' });
+        }
+
+        const recipientEmail = email || certificate.email;
+        if (!recipientEmail) {
+            return res.status(400).json({
+                error: 'Email address is required'
+            });
+        }
+
+        // Send via Email
+        const result = await sendCertificateViaEmail(
+            recipientEmail,
+            certificate.pdf_path,
+            certificate
+        );
+
+        res.json({
+            success: true,
+            message: 'Certificate sent via email successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error sending certificate via email:', error);
+        res.status(500).json({
+            error: 'Failed to send certificate via email',
+            details: error.message
+        });
+    }
+};
+
 export default {
     createCertificate,
     getAllCertificates,
@@ -295,6 +345,7 @@ export default {
     updateCertificate,
     deleteCertificate,
     sendCertificateWhatsApp,
+    sendCertificateEmail,
     getCertificateStats,
     downloadCertificate
 };

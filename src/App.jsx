@@ -1,11 +1,18 @@
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Dashboard from './components/Dashboard';
-import './index.css';
+import Login from './components/Login';
+
+function AppContent() {
+  const { user } = useAuth();
+
+  return user ? <Dashboard /> : <Login />;
+}
 
 function App() {
   return (
-    <div className="App">
-      <Dashboard />
-    </div>
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 

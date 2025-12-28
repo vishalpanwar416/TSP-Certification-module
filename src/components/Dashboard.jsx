@@ -8,14 +8,17 @@ import {
     Plus,
     CheckCircle,
     Clock,
-    FileText
+    FileText,
+    LogOut
 } from 'lucide-react';
 import { certificateAPI } from '../services/api';
 import CreateCertificateModal from './CreateCertificateModal';
 import SendWhatsAppModal from './SendWhatsAppModal';
 import PreviewCertificateModal from './PreviewCertificateModal';
+import { useAuth } from '../contexts/AuthContext';
 
 function Dashboard() {
+    const { logout, user } = useAuth();
     const [certificates, setCertificates] = useState([]);
     const [stats, setStats] = useState({ total: 0, whatsapp_sent: 0, pending: 0 });
     const [loading, setLoading] = useState(true);
@@ -106,12 +109,21 @@ function Dashboard() {
         setSelectedCertificate(null);
     };
 
+    const handleLogout = async () => {
+        try {
+            await logout();
+        } catch (error) {
+            console.error('Logout error:', error);
+        }
+    };
+
     return (
         <div className="dashboard">
             {/* Header */}
             <header className="dashboard-header" style={{
                 background: 'var(--gradient-primary)',
-                boxShadow: 'var(--shadow-md)'
+                boxShadow: 'var(--shadow-md)',
+                marginBottom: '2rem'
             }}>
                 <div className="container">
                     <div className="flex-between" style={{ padding: '1.5rem 0' }}>
@@ -140,22 +152,34 @@ function Dashboard() {
                                 color: 'rgba(255,255,255,0.8)',
                                 fontSize: '0.875rem'
                             }}>
-                                Create, manage, and send certificates via WhatsApp
+                                {user?.email || 'Logged in'}
                             </p>
                         </div>
-                        <button
-                            className="btn"
-                            style={{
-                                background: 'white',
-                                color: 'var(--primary)',
-                                fontWeight: 'bold',
-                                padding: '0.75rem 2rem'
-                            }}
-                            onClick={() => setShowCreateModal(true)}
-                        >
-                            <Plus size={20} />
-                            Create Certificate
-                        </button>
+                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                            <button
+                                className="btn"
+                                style={{
+                                    background: 'white',
+                                    color: 'var(--primary)',
+                                    fontWeight: 'bold',
+                                    padding: '0.75rem 2rem'
+                                }}
+                                onClick={() => setShowCreateModal(true)}
+                            >
+                                <Plus size={20} />
+                                Create Certificate
+                            </button>
+                            <button
+                                className="btn btn-secondary"
+                                style={{
+                                    padding: '0.75rem 1.5rem'
+                                }}
+                                onClick={handleLogout}
+                                title="Logout"
+                            >
+                                <LogOut size={20} />
+                            </button>
+                        </div>
                     </div>
                 </div>
             </header>
