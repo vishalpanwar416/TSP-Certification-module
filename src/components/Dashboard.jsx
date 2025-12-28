@@ -10,7 +10,8 @@ import {
     Clock,
     FileText,
     LogOut,
-    FileSpreadsheet
+    FileSpreadsheet,
+    X
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { certificateAPI } from '../services/api';
@@ -39,9 +40,8 @@ function Dashboard() {
             setCertificates(certificates);
         } catch (error) {
             console.error('Error fetching certificates:', error);
-            const errorMessage = error.response?.data?.error || error.message || 'Failed to load certificates';
-            const detailedMessage = `Failed to load certificates: ${errorMessage}\n\nMake sure the backend server is running on http://localhost:5000`;
-            alert(detailedMessage);
+            const errorMessage = error.message || 'Failed to load certificates';
+            alert(`Failed to load certificates: ${errorMessage}`);
         } finally {
             setLoading(false);
         }
@@ -106,9 +106,17 @@ function Dashboard() {
         }
     };
 
-    // Handle download
-    const handleDownload = (id) => {
-        window.open(certificateAPI.downloadUrl(id), '_blank');
+    // Handle download (now shows certificate details since we don't have PDF generation)
+    const handleDownload = (certificate) => {
+        // Create a simple text file with certificate details
+        const content = `Certificate Details\n==================\nRecipient: ${certificate.recipient_name}\nCertificate Number: ${certificate.certificate_number}\nRERA Number: ${certificate.award_rera_number || 'N/A'}\nDescription: ${certificate.description || 'N/A'}\nPhone: ${certificate.phone_number || 'N/A'}\nStatus: ${certificate.whatsapp_sent ? 'Sent' : 'Pending'}\nCreated: ${new Date(certificate.created_at).toLocaleDateString()}`;
+        const blob = new Blob([content], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `certificate-${certificate.certificate_number}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     // Handle preview
@@ -166,7 +174,7 @@ function Dashboard() {
 
             // Download the file
             XLSX.writeFile(workbook, filename);
-            
+
             alert(`Exported ${certificates.length} certificate(s) to ${filename}`);
         } catch (error) {
             console.error('Error exporting to Excel:', error);
@@ -377,8 +385,8 @@ function Dashboard() {
                                                     <button
                                                         className="btn btn-secondary"
                                                         style={{ padding: '0.5rem' }}
-                                                        onClick={() => handleDownload(cert.id)}
-                                                        title="Download PDF"
+                                                        onClick={() => handleDownload(cert)}
+                                                        title="Download Details"
                                                     >
                                                         <Download size={16} />
                                                     </button>
@@ -433,12 +441,12 @@ function Dashboard() {
                     setShowPreviewModal(false);
                     setSelectedCertificate(null);
                 }}>
-                    <div className="modal" style={{ maxWidth: '90vw', maxHeight: '90vh' }} onClick={(e) => e.stopPropagation()}>
+                    <div className="modal" style={{ maxWidth: '600px' }} onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
                             <div>
-                                <h2 className="modal-title">Preview Certificate</h2>
+                                <h2 className="modal-title">Certificate Details</h2>
                                 <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-                                    {selectedCertificate.recipient_name} - {selectedCertificate.certificate_number}
+                                    {selectedCertificate.recipient_name}
                                 </p>
                             </div>
                             <button
@@ -451,25 +459,51 @@ function Dashboard() {
                                 <X size={24} />
                             </button>
                         </div>
-                        <div className="modal-body" style={{ padding: 0, height: '75vh' }}>
-                            <iframe
-                                src={certificateAPI.getPdfUrl(selectedCertificate.id)}
-                                style={{
-                                    width: '100%',
-                                    height: '100%',
-                                    border: 'none',
-                                    borderRadius: '0 0 var(--radius-xl) var(--radius-xl)'
-                                }}
-                                title="Certificate Preview"
-                            />
+                        <div className="modal-body">
+                            <div style={{ display: 'grid', gap: '1rem' }}>
+                                <div>
+                                    <label style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Certificate Number</label>
+                                    <p style={{ fontSize: '1.125rem', fontWeight: 600 }}>{selectedCertificate.certificate_number}</p>
+                                </div>
+                                <div>
+                                    <label style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Recipient Name</label>
+                                    <p style={{ fontSize: '1.125rem' }}>{selectedCertificate.recipient_name}</p>
+                                </div>
+                                {selectedCertificate.award_rera_number && (
+                                    <div>
+                                        <label style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>RERA Number</label>
+                                        <p>{selectedCertificate.award_rera_number}</p>
+                                    </div>
+                                )}
+                                {selectedCertificate.description && (
+                                    <div>
+                                        <label style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Description</label>
+                                        <p>{selectedCertificate.description}</p>
+                                    </div>
+                                )}
+                                {selectedCertificate.phone_number && (
+                                    <div>
+                                        <label style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Phone Number</label>
+                                        <p>{selectedCertificate.phone_number}</p>
+                                    </div>
+                                )}
+                                <div>
+                                    <label style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Status</label>
+                                    <p>{selectedCertificate.whatsapp_sent ? '✅ Sent via WhatsApp' : '⏳ Pending'}</p>
+                                </div>
+                                <div>
+                                    <label style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase' }}>Created</label>
+                                    <p>{new Date(selectedCertificate.created_at).toLocaleString()}</p>
+                                </div>
+                            </div>
                         </div>
                         <div className="modal-footer">
                             <button
                                 className="btn btn-secondary"
-                                onClick={() => handleDownload(selectedCertificate.id)}
+                                onClick={() => handleDownload(selectedCertificate)}
                             >
                                 <Download size={20} />
-                                Download PDF
+                                Download Details
                             </button>
                             <button
                                 className="btn btn-success"
