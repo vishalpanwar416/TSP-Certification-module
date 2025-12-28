@@ -1,0 +1,30 @@
+{
+    "version": 2,
+    "builds": [
+        {
+            "src": "package.json",
+            "use": "@vercel/static-build",
+            "config": {
+                "distDir": "dist"
+            }
+        }
+    ],
+    "routes": [
+        {
+            "src": "/api/(.*)",
+            "dest": "https://your-backend-url.vercel.app/api/$1"
+        },
+        {
+            "src": "/(.*)",
+            "dest": "/$1"
+        }
+    ],
+    "env": {
+        "VITE_FIREBASE_API_KEY": "@firebase-api-key",
+        "VITE_FIREBASE_AUTH_DOMAIN": "@firebase-auth-domain",
+        "VITE_FIREBASE_PROJECT_ID": "@firebase-project-id",
+        "VITE_FIREBASE_STORAGE_BUCKET": "@firebase-storage-bucket",
+        "VITE_FIREBASE_MESSAGING_SENDER_ID": "@firebase-messaging-sender-id",
+        "VITE_FIREBASE_APP_ID": "@firebase-app-id"
+    }
+}
