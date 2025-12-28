@@ -1,45 +1,45 @@
 :root {
-  /* Color Palette */
+  /* Color Palette - Red & White Theme */
   --primary: #d32f2f;
   --primary-dark: #b71c1c;
   --primary-light: #ff6659;
   --secondary: #1a5a8a;
   --accent: #ffd700;
-  
+
   /* Gradients */
-  --gradient-primary: linear-gradient(135deg, #d32f2f 0%, #b71c1c 100%);
+  --gradient-primary: linear-gradient(135deg, #d32f2f 0%, #c62828 100%);
   --gradient-secondary: linear-gradient(135deg, #1a5a8a 0%, #0d3a5a 100%);
   --gradient-accent: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%);
-  --gradient-bg: linear-gradient(180deg, #0a0e27 0%, #1a1f3a 100%);
-  
-  /* Neutral Colors */
-  --bg-primary: #0a0e27;
-  --bg-secondary: #1a1f3a;
-  --bg-tertiary: #252b47;
-  --bg-card: #1e2541;
-  
-  --text-primary: #ffffff;
-  --text-secondary: #b8bdd0;
-  --text-muted: #6e7491;
-  
-  --border-color: rgba(255, 255, 255, 0.1);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4);
-  
+  --gradient-bg: linear-gradient(180deg, #f5f5f5 0%, #ffffff 100%);
+
+  /* Neutral Colors - White Theme */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f5f5;
+  --bg-tertiary: #fafafa;
+  --bg-card: #ffffff;
+
+  --text-primary: #212121;
+  --text-secondary: #424242;
+  --text-muted: #757575;
+
+  --border-color: rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.15);
+
   /* Spacing */
   --spacing-xs: 0.5rem;
   --spacing-sm: 1rem;
   --spacing-md: 1.5rem;
   --spacing-lg: 2rem;
   --spacing-xl: 3rem;
-  
+
   /* Border Radius */
   --radius-sm: 0.5rem;
   --radius-md: 1rem;
   --radius-lg: 1.5rem;
   --radius-xl: 2rem;
-  
+
   /* Transitions */
   --transition-fast: 150ms ease-in-out;
   --transition-base: 250ms ease-in-out;
@@ -76,7 +76,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--bg-tertiary);
+  background: #e0e0e0;
   border-radius: 5px;
 }
 
@@ -85,7 +85,12 @@ body {
 }
 
 /* Typography */
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-weight: 700;
   line-height: 1.2;
   color: var(--text-primary);
@@ -464,6 +469,7 @@ a:hover {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -474,6 +480,7 @@ a:hover {
     transform: translateY(20px);
     opacity: 0;
   }
+
   to {
     transform: translateY(0);
     opacity: 1;

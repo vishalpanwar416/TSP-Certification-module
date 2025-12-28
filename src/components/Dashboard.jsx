@@ -13,6 +13,7 @@ import {
 import { certificateAPI } from '../services/api';
 import CreateCertificateModal from './CreateCertificateModal';
 import SendWhatsAppModal from './SendWhatsAppModal';
+import PreviewCertificateModal from './PreviewCertificateModal';
 
 function Dashboard() {
     const [certificates, setCertificates] = useState([]);
@@ -20,6 +21,7 @@ function Dashboard() {
     const [loading, setLoading] = useState(true);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [selectedCertificate, setSelectedCertificate] = useState(null);
 
     // Fetch certificates
@@ -93,28 +95,62 @@ function Dashboard() {
         window.open(certificateAPI.downloadUrl(id), '_blank');
     };
 
-    // Handle view
-    const handleView = (id) => {
-        window.open(certificateAPI.getPdfUrl(id), '_blank');
+    // Handle preview
+    const handlePreview = (certificate) => {
+        setSelectedCertificate(certificate);
+        setShowPreviewModal(true);
+    };
+
+    const handlePreviewClose = () => {
+        setShowPreviewModal(false);
+        setSelectedCertificate(null);
     };
 
     return (
         <div className="dashboard">
             {/* Header */}
-            <header className="dashboard-header">
+            <header className="dashboard-header" style={{
+                background: 'var(--gradient-primary)',
+                boxShadow: 'var(--shadow-md)'
+            }}>
                 <div className="container">
-                    <div className="flex-between" style={{ padding: '2rem 0' }}>
+                    <div className="flex-between" style={{ padding: '1.5rem 0' }}>
                         <div>
-                            <h1 style={{ marginBottom: '0.5rem' }}>
-                                <Award style={{ display: 'inline', marginRight: '0.5rem' }} />
-                                Certificate Generator
+                            <div style={{
+                                fontSize: '0.875rem',
+                                color: 'rgba(255,255,255,0.9)',
+                                fontWeight: '600',
+                                letterSpacing: '1px',
+                                marginBottom: '0.5rem'
+                            }}>
+                                TOP SELLING PROPERTIES
+                            </div>
+                            <h1 style={{
+                                marginBottom: '0.25rem',
+                                color: 'white',
+                                fontSize: '1.75rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem'
+                            }}>
+                                <Award size={32} />
+                                Certification Module
                             </h1>
-                            <p style={{ color: 'var(--text-muted)' }}>
+                            <p style={{
+                                color: 'rgba(255,255,255,0.8)',
+                                fontSize: '0.875rem'
+                            }}>
                                 Create, manage, and send certificates via WhatsApp
                             </p>
                         </div>
                         <button
-                            className="btn btn-primary"
+                            className="btn"
+                            style={{
+                                background: 'white',
+                                color: 'var(--primary)',
+                                fontWeight: 'bold',
+                                padding: '0.75rem 2rem'
+                            }}
                             onClick={() => setShowCreateModal(true)}
                         >
                             <Plus size={20} />
@@ -205,7 +241,8 @@ function Dashboard() {
                                                     background: 'var(--bg-tertiary)',
                                                     padding: '0.25rem 0.5rem',
                                                     borderRadius: 'var(--radius-sm)',
-                                                    fontSize: '0.875rem'
+                                                    fontSize: '0.875rem',
+                                                    color: 'var(--text-primary)'
                                                 }}>
                                                     {cert.certificate_number}
                                                 </code>
@@ -232,8 +269,8 @@ function Dashboard() {
                                                     <button
                                                         className="btn btn-secondary"
                                                         style={{ padding: '0.5rem' }}
-                                                        onClick={() => handleView(cert.id)}
-                                                        title="View Certificate"
+                                                        onClick={() => handlePreview(cert)}
+                                                        title="Preview Certificate"
                                                     >
                                                         <Eye size={16} />
                                                     </button>
@@ -289,6 +326,64 @@ function Dashboard() {
                     }}
                     onSuccess={handleWhatsAppSuccess}
                 />
+            )}
+
+            {showPreviewModal && selectedCertificate && (
+                <div className="modal-overlay" onClick={() => {
+                    setShowPreviewModal(false);
+                    setSelectedCertificate(null);
+                }}>
+                    <div className="modal" style={{ maxWidth: '90vw', maxHeight: '90vh' }} onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <div>
+                                <h2 className="modal-title">Preview Certificate</h2>
+                                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
+                                    {selectedCertificate.recipient_name} - {selectedCertificate.certificate_number}
+                                </p>
+                            </div>
+                            <button
+                                className="modal-close"
+                                onClick={() => {
+                                    setShowPreviewModal(false);
+                                    setSelectedCertificate(null);
+                                }}
+                            >
+                                <X size={24} />
+                            </button>
+                        </div>
+                        <div className="modal-body" style={{ padding: 0, height: '75vh' }}>
+                            <iframe
+                                src={certificateAPI.getPdfUrl(selectedCertificate.id)}
+                                style={{
+                                    width: '100%',
+                                    height: '100%',
+                                    border: 'none',
+                                    borderRadius: '0 0 var(--radius-xl) var(--radius-xl)'
+                                }}
+                                title="Certificate Preview"
+                            />
+                        </div>
+                        <div className="modal-footer">
+                            <button
+                                className="btn btn-secondary"
+                                onClick={() => handleDownload(selectedCertificate.id)}
+                            >
+                                <Download size={20} />
+                                Download PDF
+                            </button>
+                            <button
+                                className="btn btn-success"
+                                onClick={() => {
+                                    setShowPreviewModal(false);
+                                    handleSendWhatsApp(selectedCertificate);
+                                }}
+                            >
+                                <Send size={20} />
+                                Send via WhatsApp
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
