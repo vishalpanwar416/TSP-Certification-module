@@ -26,7 +26,7 @@ import {
 import * as XLSX from 'xlsx';
 import { certificateAPI } from '../services/api';
 import CreateCertificateModal from './CreateCertificateModal';
-import SendWhatsAppModal from './SendWhatsAppModal';
+import SendCertificateModal from './SendCertificateModal';
 import PreviewCertificateModal from './PreviewCertificateModal';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -36,7 +36,7 @@ function Dashboard() {
     const [stats, setStats] = useState({ total: 0, whatsapp_sent: 0, pending: 0 });
     const [loading, setLoading] = useState(true);
     const [showCreateModal, setShowCreateModal] = useState(false);
-    const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+    const [showSendModal, setShowSendModal] = useState(false);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
     const [selectedCertificate, setSelectedCertificate] = useState(null);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -96,14 +96,14 @@ function Dashboard() {
         fetchStats();
     };
 
-    // Handle send WhatsApp
-    const handleSendWhatsApp = (certificate) => {
+    // Handle send (WhatsApp/Email)
+    const handleSendCertificate = (certificate) => {
         setSelectedCertificate(certificate);
-        setShowWhatsAppModal(true);
+        setShowSendModal(true);
     };
 
-    const handleWhatsAppSuccess = () => {
-        setShowWhatsAppModal(false);
+    const handleSendSuccess = () => {
+        setShowSendModal(false);
         setSelectedCertificate(null);
         fetchCertificates();
         fetchStats();
@@ -221,16 +221,14 @@ function Dashboard() {
         <div className="dashboard-layout">
             {/* Sidebar */}
             <aside
-                className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${mobileMenuOpen ? 'mobile-open' : ''}`}
+                className={`sidebar ${sidebarCollapsed && !sidebarHovered ? 'collapsed' : ''} ${mobileMenuOpen ? 'mobile-open' : ''} ${sidebarHovered && sidebarCollapsed ? 'hovered' : ''}`}
                 onMouseEnter={() => {
-                    if (sidebarCollapsed && !sidebarPinned) {
-                        setSidebarCollapsed(false);
+                    if (sidebarCollapsed) {
+                        setSidebarHovered(true);
                     }
                 }}
                 onMouseLeave={() => {
-                    if (!sidebarPinned) {
-                        setSidebarCollapsed(true);
-                    }
+                    setSidebarHovered(false);
                 }}
             >
                 <div className="sidebar-header">
@@ -240,7 +238,7 @@ function Dashboard() {
                             alt="TSP Logo"
                             className="logo-image"
                         />
-                        {!sidebarCollapsed && (
+                        {(!sidebarCollapsed || sidebarHovered) && (
                             <div className="sidebar-brand-container">
                                 <span className="sidebar-brand">TSP Certs</span>
                                 <span className="sidebar-brand-sub">Certification Module</span>
@@ -262,16 +260,16 @@ function Dashboard() {
 
                 <nav className="sidebar-nav">
                     <div className="nav-section">
-                        {!sidebarCollapsed && <span className="nav-section-title">Main Menu</span>}
+                        {(!sidebarCollapsed || sidebarHovered) && <span className="nav-section-title">Main Menu</span>}
                         {navItems.map((item) => (
                             <button
                                 key={item.id}
                                 className={`sidebar-item ${activeTab === item.id ? 'active' : ''}`}
                                 onClick={() => setActiveTab(item.id)}
-                                title={sidebarCollapsed ? item.label : ''}
+                                title={sidebarCollapsed && !sidebarHovered ? item.label : ''}
                             >
                                 <item.icon size={20} />
-                                {!sidebarCollapsed && <span>{item.label}</span>}
+                                {(!sidebarCollapsed || sidebarHovered) && <span>{item.label}</span>}
                             </button>
                         ))}
                     </div>
@@ -279,16 +277,16 @@ function Dashboard() {
 
                 <div className="sidebar-footer">
                     <div className="nav-section">
-                        {!sidebarCollapsed && <span className="nav-section-title">Support</span>}
+                        {(!sidebarCollapsed || sidebarHovered) && <span className="nav-section-title">Support</span>}
                         {bottomNavItems.map((item) => (
                             <button
                                 key={item.id}
                                 className={`sidebar-item ${activeTab === item.id ? 'active' : ''}`}
                                 onClick={() => setActiveTab(item.id)}
-                                title={sidebarCollapsed ? item.label : ''}
+                                title={sidebarCollapsed && !sidebarHovered ? item.label : ''}
                             >
                                 <item.icon size={20} />
-                                {!sidebarCollapsed && <span>{item.label}</span>}
+                                {(!sidebarCollapsed || sidebarHovered) && <span>{item.label}</span>}
                             </button>
                         ))}
                     </div>
@@ -297,7 +295,7 @@ function Dashboard() {
                         <div className="user-avatar">
                             {user?.email?.charAt(0).toUpperCase() || 'U'}
                         </div>
-                        {!sidebarCollapsed && (
+                        {(!sidebarCollapsed || sidebarHovered) && (
                             <div className="user-info">
                                 <span className="user-name">{user?.email?.split('@')[0] || 'User'}</span>
                                 <span className="user-email">{user?.email || 'admin@tsp.com'}</span>
@@ -601,8 +599,8 @@ function Dashboard() {
                                                         </button>
                                                         <button
                                                             className="action-btn action-btn-send"
-                                                            onClick={() => handleSendWhatsApp(cert)}
-                                                            title="Send via WhatsApp"
+                                                            onClick={() => handleSendCertificate(cert)}
+                                                            title="Send Certificate"
                                                         >
                                                             <Send size={16} />
                                                         </button>
@@ -633,14 +631,14 @@ function Dashboard() {
                 />
             )}
 
-            {showWhatsAppModal && selectedCertificate && (
-                <SendWhatsAppModal
+            {showSendModal && selectedCertificate && (
+                <SendCertificateModal
                     certificate={selectedCertificate}
                     onClose={() => {
-                        setShowWhatsAppModal(false);
+                        setShowSendModal(false);
                         setSelectedCertificate(null);
                     }}
-                    onSuccess={handleWhatsAppSuccess}
+                    onSuccess={handleSendSuccess}
                 />
             )}
 
@@ -718,14 +716,14 @@ function Dashboard() {
                                 Download Details
                             </button>
                             <button
-                                className="btn btn-success"
+                                className="btn btn-primary"
                                 onClick={() => {
                                     setShowPreviewModal(false);
-                                    handleSendWhatsApp(selectedCertificate);
+                                    handleSendCertificate(selectedCertificate);
                                 }}
                             >
                                 <Send size={20} />
-                                Send via WhatsApp
+                                Send Certificate
                             </button>
                         </div>
                     </div>

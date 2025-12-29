@@ -1,7 +1,7 @@
 // Firebase Service - Client-side API for Firebase Cloud Functions
 // This service communicates with the Firebase Cloud Functions backend
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 
+const API_BASE_URL = import.meta.env.VITE_API_URL ||
     'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
 
 /**
@@ -19,7 +19,7 @@ async function apiRequest(endpoint, options = {}) {
 
     try {
         const response = await fetch(url, config);
-        
+
         // Handle non-JSON responses (like redirects)
         if (response.redirected || response.status === 302) {
             return response.url;
@@ -96,22 +96,65 @@ export const certificateAPI = {
 
     /**
      * Send certificate via WhatsApp
+     * @param {string} id - Certificate ID
+     * @param {string} phoneNumber - Recipient phone number
+     * @param {Object} options - Optional settings
+     * @param {string} options.customMessage - Custom WhatsApp message template
+     * @param {string} options.scheduledAt - ISO date string for scheduled sending
      */
-    async sendWhatsApp(id, phoneNumber) {
+    async sendWhatsApp(id, phoneNumber, options = {}) {
         return apiRequest(`/certificates/${id}/send-whatsapp`, {
             method: 'POST',
-            body: JSON.stringify({ phone_number: phoneNumber }),
+            body: JSON.stringify({
+                phone_number: phoneNumber,
+                custom_message: options.customMessage,
+                scheduled_at: options.scheduledAt,
+            }),
         });
     },
 
     /**
      * Send certificate via Email
+     * @param {string} id - Certificate ID
+     * @param {string} email - Recipient email address
+     * @param {Object} options - Optional settings
+     * @param {string} options.subject - Custom email subject
+     * @param {string} options.body - Custom email body
+     * @param {string} options.scheduledAt - ISO date string for scheduled sending
      */
-    async sendEmail(id, email) {
+    async sendEmail(id, email, options = {}) {
         return apiRequest(`/certificates/${id}/send-email`, {
             method: 'POST',
-            body: JSON.stringify({ email }),
+            body: JSON.stringify({
+                email,
+                subject: options.subject,
+                body: options.body,
+                scheduled_at: options.scheduledAt,
+            }),
         });
+    },
+
+    /**
+     * Get scheduled messages for a certificate
+     */
+    async getScheduledMessages(certificateId) {
+        return apiRequest(`/certificates/${certificateId}/scheduled`);
+    },
+
+    /**
+     * Cancel a scheduled message
+     */
+    async cancelScheduledMessage(certificateId, messageId) {
+        return apiRequest(`/certificates/${certificateId}/scheduled/${messageId}`, {
+            method: 'DELETE',
+        });
+    },
+
+    /**
+     * Get all scheduled messages
+     */
+    async getAllScheduled() {
+        return apiRequest('/scheduled');
     },
 
     /**
