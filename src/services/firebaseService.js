@@ -1,176 +1,160 @@
-// Firebase Firestore service for certificates
-import { getFirestore, collection, doc, addDoc, getDoc, getDocs, updateDoc, deleteDoc, query, orderBy, serverTimestamp } from 'firebase/firestore';
-import { app } from '../config/firebase';
+// Firebase Service - Client-side API for Firebase Cloud Functions
+// This service communicates with the Firebase Cloud Functions backend
 
-// Initialize Firestore
-const db = getFirestore(app);
-const CERTIFICATES_COLLECTION = 'certificates';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 
+    'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
 
-// Generate unique certificate number
-const generateCertificateNumber = () => {
-    const timestamp = Date.now().toString(36).toUpperCase();
-    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-    return `TSP-${timestamp}-${random}`;
-};
+/**
+ * Make API request helper
+ */
+async function apiRequest(endpoint, options = {}) {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const config = {
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers,
+        },
+        ...options,
+    };
 
-// Certificate API using Firestore
+    try {
+        const response = await fetch(url, config);
+        
+        // Handle non-JSON responses (like redirects)
+        if (response.redirected || response.status === 302) {
+            return response.url;
+        }
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            const error = new Error(data.error || 'Request failed');
+            error.response = {
+                status: response.status,
+                data: data,
+            };
+            throw error;
+        }
+
+        // Return data directly if wrapped in success response
+        return data.data !== undefined ? data.data : data;
+    } catch (error) {
+        if (error.response) {
+            throw error;
+        }
+        // Network or other errors
+        throw new Error(error.message || 'Network error occurred');
+    }
+}
+
+/**
+ * Certificate API object with all CRUD operations
+ */
 export const certificateAPI = {
-    // Get all certificates
-    getAll: async () => {
-        try {
-            const certificatesRef = collection(db, CERTIFICATES_COLLECTION);
-            const q = query(certificatesRef, orderBy('created_at', 'desc'));
-            const snapshot = await getDocs(q);
-            
-            return snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data(),
-                created_at: doc.data().created_at?.toDate?.()?.toISOString() || doc.data().created_at
-            }));
-        } catch (error) {
-            console.error('Error fetching certificates:', error);
-            throw error;
-        }
+    /**
+     * Get all certificates
+     */
+    async getAll() {
+        return apiRequest('/certificates');
     },
 
-    // Get certificate by ID
-    getById: async (id) => {
-        try {
-            const docRef = doc(db, CERTIFICATES_COLLECTION, id);
-            const docSnap = await getDoc(docRef);
-            
-            if (!docSnap.exists()) {
-                throw new Error('Certificate not found');
-            }
-            
-            return {
-                id: docSnap.id,
-                ...docSnap.data(),
-                created_at: docSnap.data().created_at?.toDate?.()?.toISOString() || docSnap.data().created_at
-            };
-        } catch (error) {
-            console.error('Error fetching certificate:', error);
-            throw error;
-        }
+    /**
+     * Get certificate by ID
+     */
+    async getById(id) {
+        return apiRequest(`/certificates/${id}`);
     },
 
-    // Create new certificate
-    create: async (data) => {
-        try {
-            const certificateData = {
-                recipient_name: data.recipient_name || data.recipientName,
-                certificate_number: data.certificate_number || generateCertificateNumber(),
-                phone_number: data.phone_number || data.phoneNumber || '',
-                description: data.description || '',
-                award_rera_number: data.award_rera_number || data.awardReraNumber || '',
-                whatsapp_sent: false,
-                created_at: serverTimestamp(),
-                updated_at: serverTimestamp()
-            };
-
-            const docRef = await addDoc(collection(db, CERTIFICATES_COLLECTION), certificateData);
-            
-            return {
-                id: docRef.id,
-                ...certificateData,
-                created_at: new Date().toISOString()
-            };
-        } catch (error) {
-            console.error('Error creating certificate:', error);
-            throw error;
-        }
+    /**
+     * Create a new certificate
+     */
+    async create(certificateData) {
+        return apiRequest('/certificates', {
+            method: 'POST',
+            body: JSON.stringify(certificateData),
+        });
     },
 
-    // Update certificate
-    update: async (id, data) => {
-        try {
-            const docRef = doc(db, CERTIFICATES_COLLECTION, id);
-            await updateDoc(docRef, {
-                ...data,
-                updated_at: serverTimestamp()
-            });
-            
-            return { success: true };
-        } catch (error) {
-            console.error('Error updating certificate:', error);
-            throw error;
-        }
+    /**
+     * Update a certificate
+     */
+    async update(id, updates) {
+        return apiRequest(`/certificates/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(updates),
+        });
     },
 
-    // Delete certificate
-    delete: async (id) => {
-        try {
-            const docRef = doc(db, CERTIFICATES_COLLECTION, id);
-            await deleteDoc(docRef);
-            
-            return { success: true };
-        } catch (error) {
-            console.error('Error deleting certificate:', error);
-            throw error;
-        }
+    /**
+     * Delete a certificate
+     */
+    async delete(id) {
+        return apiRequest(`/certificates/${id}`, {
+            method: 'DELETE',
+        });
     },
 
-    // Mark as sent via WhatsApp (update status only)
-    sendWhatsApp: async (id, phoneNumber) => {
-        try {
-            const docRef = doc(db, CERTIFICATES_COLLECTION, id);
-            await updateDoc(docRef, {
-                whatsapp_sent: true,
-                phone_number: phoneNumber,
-                whatsapp_sent_at: serverTimestamp(),
-                updated_at: serverTimestamp()
-            });
-            
-            return { success: true, message: 'Certificate marked as sent' };
-        } catch (error) {
-            console.error('Error updating WhatsApp status:', error);
-            throw error;
-        }
+    /**
+     * Send certificate via WhatsApp
+     */
+    async sendWhatsApp(id, phoneNumber) {
+        return apiRequest(`/certificates/${id}/send-whatsapp`, {
+            method: 'POST',
+            body: JSON.stringify({ phone_number: phoneNumber }),
+        });
     },
 
-    // Download URL (placeholder - certificates are stored as data, not files)
-    downloadUrl: (id) => {
-        // Since we're not storing PDFs, return null
-        // You can implement PDF generation on the client side if needed
-        return null;
+    /**
+     * Send certificate via Email
+     */
+    async sendEmail(id, email) {
+        return apiRequest(`/certificates/${id}/send-email`, {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+        });
     },
 
-    // Get PDF URL (placeholder)
-    getPdfUrl: (id) => {
-        return null;
+    /**
+     * Get PDF URL for a certificate
+     */
+    getPdfUrl(id) {
+        return `${API_BASE_URL}/certificates/${id}/download`;
     },
 
-    // Get statistics
-    getStats: async () => {
-        try {
-            const certificatesRef = collection(db, CERTIFICATES_COLLECTION);
-            const snapshot = await getDocs(certificatesRef);
-            
-            let total = 0;
-            let whatsapp_sent = 0;
-            let pending = 0;
-            
-            snapshot.docs.forEach(doc => {
-                total++;
-                const data = doc.data();
-                if (data.whatsapp_sent) {
-                    whatsapp_sent++;
-                } else {
-                    pending++;
-                }
-            });
-            
-            return { total, whatsapp_sent, pending };
-        } catch (error) {
-            console.error('Error fetching stats:', error);
-            return { total: 0, whatsapp_sent: 0, pending: 0 };
-        }
+    /**
+     * Get download URL for a certificate
+     */
+    downloadUrl(id) {
+        return `${API_BASE_URL}/certificates/${id}/download`;
+    },
+
+    /**
+     * Get certificate statistics
+     */
+    async getStats() {
+        return apiRequest('/certificates/stats');
     },
 };
 
-// Health check (always returns success for Firebase)
-export const healthCheck = async () => {
-    return { status: 'ok', source: 'firebase' };
-};
+/**
+ * Health check function
+ */
+export async function healthCheck() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/health`);
+        const data = await response.json();
+        return {
+            status: 'OK',
+            ...data,
+        };
+    } catch (error) {
+        return {
+            status: 'ERROR',
+            message: error.message,
+        };
+    }
+}
 
+// Default export
 export default certificateAPI;
+

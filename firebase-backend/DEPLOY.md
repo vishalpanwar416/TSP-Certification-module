@@ -328,3 +328,4 @@ Your Firebase backend is now live and ready to use!
 
 Update your frontend `.env` file and restart your dev server to use the Firebase backend.
 
+

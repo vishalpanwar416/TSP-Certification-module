@@ -80,3 +80,4 @@ echo "      VITE_API_URL=https://us-central1-channel-partner-54334.cloudfunction
 echo "   3. Restart your frontend dev server"
 echo ""
 
+
