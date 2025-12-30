@@ -2,6 +2,7 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth } from "firebase/auth";
+import { getFirestore, enableNetwork, connectFirestoreEmulator } from "firebase/firestore";
 // TODO: Add SDKs for Firebase products that you want to use
 // https://firebase.google.com/docs/web/setup#available-libraries
 
@@ -21,10 +22,21 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Force enable network for Firestore (helps with connectivity issues)
+enableNetwork(db).then(() => {
+  console.log('✅ Firestore network enabled');
+}).catch((err) => {
+  console.error('❌ Error enabling Firestore network:', err);
+});
 
 // Verify auth is initialized
 if (!auth) {
-    console.error('Firebase Auth failed to initialize!');
+  console.error('Firebase Auth failed to initialize!');
 }
 
-export { app, analytics, auth, firebaseConfig };
+console.log('✅ Firebase initialized with project:', firebaseConfig.projectId);
+
+export { app, analytics, auth, db, firebaseConfig };
+

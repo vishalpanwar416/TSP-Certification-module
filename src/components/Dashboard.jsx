@@ -21,7 +21,9 @@ import {
     Menu,
     ChevronLeft,
     HelpCircle,
-    Calendar
+    Calendar,
+    Mail,
+    MessageCircle
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { certificateAPI } from '../services/api';

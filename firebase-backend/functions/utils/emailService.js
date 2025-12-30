@@ -168,9 +168,142 @@ const isEmailConfigured = () => {
     return transporter !== undefined;
 };
 
+/**
+ * Send bulk marketing email
+ * @param {string} recipientEmail - Recipient email address
+ * @param {string} subject - Email subject
+ * @param {string} htmlContent - HTML content of the email (can contain plain text)
+ */
+const sendBulkEmail = async (recipientEmail, subject, htmlContent) => {
+    if (!transporter) {
+        throw new Error('Email service is not configured. Please set up your email credentials.');
+    }
+
+    try {
+        // Check if content is HTML or plain text
+        const isHtml = htmlContent.includes('<') && htmlContent.includes('>');
+
+        const mailOptions = {
+            from: `"MarketHub" <${emailConfig.from}>`,
+            to: recipientEmail,
+            subject: subject || 'Message from MarketHub',
+            ...(isHtml ? {
+                html: `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <style>
+                            body {
+                                font-family: Arial, sans-serif;
+                                line-height: 1.6;
+                                color: #333;
+                                max-width: 600px;
+                                margin: 0 auto;
+                                padding: 20px;
+                            }
+                            .header {
+                                background: linear-gradient(135deg, #d32f2f 0%, #c62828 100%);
+                                color: white;
+                                padding: 30px;
+                                text-align: center;
+                                border-radius: 10px 10px 0 0;
+                            }
+                            .content {
+                                background: #f9f9f9;
+                                padding: 30px;
+                                border-radius: 0 0 10px 10px;
+                            }
+                            .footer {
+                                text-align: center;
+                                margin-top: 30px;
+                                color: #666;
+                                font-size: 12px;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="header">
+                            <h1>MarketHub</h1>
+                        </div>
+                        <div class="content">
+                            ${htmlContent}
+                        </div>
+                        <div class="footer">
+                            <p>Sent via MarketHub</p>
+                        </div>
+                    </body>
+                    </html>
+                `,
+            } : {
+                text: htmlContent,
+                html: `
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <style>
+                            body {
+                                font-family: Arial, sans-serif;
+                                line-height: 1.6;
+                                color: #333;
+                                max-width: 600px;
+                                margin: 0 auto;
+                                padding: 20px;
+                            }
+                            .header {
+                                background: linear-gradient(135deg, #d32f2f 0%, #c62828 100%);
+                                color: white;
+                                padding: 30px;
+                                text-align: center;
+                                border-radius: 10px 10px 0 0;
+                            }
+                            .content {
+                                background: #f9f9f9;
+                                padding: 30px;
+                                border-radius: 0 0 10px 10px;
+                                white-space: pre-wrap;
+                            }
+                            .footer {
+                                text-align: center;
+                                margin-top: 30px;
+                                color: #666;
+                                font-size: 12px;
+                            }
+                        </style>
+                    </head>
+                    <body>
+                        <div class="header">
+                            <h1>MarketHub</h1>
+                        </div>
+                        <div class="content">
+                            ${htmlContent.replace(/\n/g, '<br>')}
+                        </div>
+                        <div class="footer">
+                            <p>Sent via MarketHub</p>
+                        </div>
+                    </body>
+                    </html>
+                `,
+            }),
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log(`✅ Bulk email sent to ${recipientEmail}. Message ID: ${info.messageId}`);
+
+        return {
+            success: true,
+            messageId: info.messageId,
+            to: recipientEmail,
+        };
+    } catch (error) {
+        console.error('Error sending bulk email:', error);
+        throw error;
+    }
+};
+
 module.exports = {
     sendCertificateViaEmail,
     isEmailConfigured,
+    sendBulkEmail,
 };
 
 

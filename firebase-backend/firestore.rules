@@ -11,5 +11,20 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false; // Only Cloud Functions can write
     }
+    
+    // Marketing Contacts - Allow all for development (add auth in production)
+    match /marketing_contacts/{contactId} {
+      allow read, write: if true;
+    }
+    
+    // Marketing Campaigns - Allow all for development
+    match /marketing_campaigns/{campaignId} {
+      allow read, write: if true;
+    }
+    
+    // Marketing Templates - Allow all for development
+    match /marketing_templates/{templateId} {
+      allow read, write: if true;
+    }
   }
 }
