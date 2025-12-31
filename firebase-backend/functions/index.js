@@ -16,6 +16,65 @@ const storage = admin.storage();
 // Create Express app
 const app = express();
 
+const { FieldValue } = require('firebase-admin/firestore');
+
+// ============================================
+// DATABASE INITIALIZATION
+// ============================================
+
+/**
+ * Initialize Database Collections
+ * POST /init-db
+ */
+app.post('/init-db', async (req, res) => {
+    try {
+        const collections = [
+            'certificates',
+            'marketing_contacts',
+            'marketing_campaigns',
+            'marketing_templates'
+        ];
+
+        const batch = db.batch();
+        const results = {};
+
+        for (const col of collections) {
+            // Create a dummy document to initialize the collection
+            // We use a specific ID '_init_' so we can easily find/delete it later if needed,
+            // or just leave it as metadata.
+            const docRef = db.collection(col).doc('_init_');
+            const doc = await docRef.get();
+
+            if (!doc.exists) {
+                batch.set(docRef, {
+                    _initialized: true,
+                    _created_at: FieldValue.serverTimestamp(),
+                    _description: `Collection ${col} initialized`
+                });
+                results[col] = 'Created';
+            } else {
+                results[col] = 'Already exists';
+            }
+        }
+
+        await batch.commit();
+
+        res.json({
+            success: true,
+            message: 'Database collections initialized',
+            results
+        });
+    } catch (error) {
+        console.error('Error initializing database:', error);
+        res.status(500).json({
+            error: 'Failed to initialize database',
+            details: error.message
+        });
+    }
+});
+
+
+
 // Configure CORS
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
@@ -85,8 +144,8 @@ app.post('/certificates', async (req, res) => {
             whatsapp_sent_at: null,
             email_sent: false,
             email_sent_at: null,
-            created_at: admin.firestore.FieldValue.serverTimestamp(),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            created_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
         };
 
         // Generate PDF
@@ -221,7 +280,7 @@ app.put('/certificates/:id', async (req, res) => {
         delete updates.created_at;
         delete updates.pdf_url;
 
-        updates.updated_at = admin.firestore.FieldValue.serverTimestamp();
+        updates.updated_at = FieldValue.serverTimestamp();
 
         await docRef.update(updates);
 
@@ -320,8 +379,8 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
         // Update WhatsApp status
         await db.collection('certificates').doc(id).update({
             whatsapp_sent: true,
-            whatsapp_sent_at: admin.firestore.FieldValue.serverTimestamp(),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            whatsapp_sent_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
         });
 
         res.json({
@@ -379,8 +438,8 @@ app.post('/certificates/:id/send-email', async (req, res) => {
         // Update email status
         await db.collection('certificates').doc(id).update({
             email_sent: true,
-            email_sent_at: admin.firestore.FieldValue.serverTimestamp(),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            email_sent_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
         });
 
         res.json({
@@ -576,8 +635,8 @@ app.post('/certificates/bulk-send', async (req, res) => {
                     const certRef = db.collection('certificates').doc(certId);
                     batch.update(certRef, {
                         whatsapp_sent: true,
-                        whatsapp_sent_at: admin.firestore.FieldValue.serverTimestamp(),
-                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                        whatsapp_sent_at: FieldValue.serverTimestamp(),
+                        updated_at: FieldValue.serverTimestamp()
                     });
 
                     results.whatsapp.sent++;
@@ -637,8 +696,8 @@ app.post('/certificates/bulk-send', async (req, res) => {
                     const certRef = db.collection('certificates').doc(certId);
                     batch.update(certRef, {
                         email_sent: true,
-                        email_sent_at: admin.firestore.FieldValue.serverTimestamp(),
-                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                        email_sent_at: FieldValue.serverTimestamp(),
+                        updated_at: FieldValue.serverTimestamp()
                     });
 
                     results.email.sent++;
@@ -768,8 +827,8 @@ app.post('/marketing/contacts', async (req, res) => {
             email_sent_count: 0,
             whatsapp_sent_count: 0,
             last_contacted_at: null,
-            created_at: admin.firestore.FieldValue.serverTimestamp(),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            created_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
         };
 
         await db.collection('marketing_contacts').doc(id).set(contactData);
@@ -816,8 +875,8 @@ app.post('/marketing/contacts/bulk', async (req, res) => {
                 email_sent_count: 0,
                 whatsapp_sent_count: 0,
                 last_contacted_at: null,
-                created_at: admin.firestore.FieldValue.serverTimestamp(),
-                updated_at: admin.firestore.FieldValue.serverTimestamp()
+                created_at: FieldValue.serverTimestamp(),
+                updated_at: FieldValue.serverTimestamp()
             };
 
             currentBatch.set(db.collection('marketing_contacts').doc(id), contactData);
@@ -858,7 +917,7 @@ app.put('/marketing/contacts/:id', async (req, res) => {
 
         delete updates.id;
         delete updates.created_at;
-        updates.updated_at = admin.firestore.FieldValue.serverTimestamp();
+        updates.updated_at = FieldValue.serverTimestamp();
 
         const docRef = db.collection('marketing_contacts').doc(id);
         const doc = await docRef.get();
@@ -1034,8 +1093,8 @@ app.post('/marketing/campaigns', async (req, res) => {
             status: isScheduled ? 'scheduled' : 'pending',
             scheduled_at: scheduledAt ? new Date(scheduledAt) : null,
             sent_at: null,
-            created_at: admin.firestore.FieldValue.serverTimestamp(),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            created_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
         };
 
         await db.collection('marketing_campaigns').doc(id).set(campaignData);
@@ -1084,8 +1143,8 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                     // Update contact stats
                     const contactRef = db.collection('marketing_contacts').doc(contact.id);
                     batch.update(contactRef, {
-                        email_sent_count: admin.firestore.FieldValue.increment(1),
-                        last_contacted_at: admin.firestore.FieldValue.serverTimestamp(),
+                        email_sent_count: FieldValue.increment(1),
+                        last_contacted_at: FieldValue.serverTimestamp(),
                         last_contact_type: 'email'
                     });
                 }
@@ -1097,8 +1156,8 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                     // Update contact stats
                     const contactRef = db.collection('marketing_contacts').doc(contact.id);
                     batch.update(contactRef, {
-                        whatsapp_sent_count: admin.firestore.FieldValue.increment(1),
-                        last_contacted_at: admin.firestore.FieldValue.serverTimestamp(),
+                        whatsapp_sent_count: FieldValue.increment(1),
+                        last_contacted_at: FieldValue.serverTimestamp(),
                         last_contact_type: 'whatsapp'
                     });
                 }
@@ -1114,8 +1173,8 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
         status: 'completed',
         sent_count: sentCount,
         failed_count: failedCount,
-        sent_at: admin.firestore.FieldValue.serverTimestamp(),
-        updated_at: admin.firestore.FieldValue.serverTimestamp()
+        sent_at: FieldValue.serverTimestamp(),
+        updated_at: FieldValue.serverTimestamp()
     });
 
     await batch.commit();
@@ -1190,7 +1249,7 @@ app.post('/marketing/campaigns/:id/cancel', async (req, res) => {
 
         await docRef.update({
             status: 'cancelled',
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            updated_at: FieldValue.serverTimestamp()
         });
 
         res.json({ success: true, message: 'Campaign cancelled successfully' });
@@ -1296,8 +1355,8 @@ app.post('/marketing/templates', async (req, res) => {
             subject: subject || null,
             content,
             usage_count: 0,
-            created_at: admin.firestore.FieldValue.serverTimestamp(),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            created_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
         };
 
         await db.collection('marketing_templates').doc(id).set(templateData);
@@ -1323,7 +1382,7 @@ app.put('/marketing/templates/:id', async (req, res) => {
 
         delete updates.id;
         delete updates.created_at;
-        updates.updated_at = admin.firestore.FieldValue.serverTimestamp();
+        updates.updated_at = FieldValue.serverTimestamp();
 
         const docRef = db.collection('marketing_templates').doc(id);
         const doc = await docRef.get();
@@ -1420,7 +1479,7 @@ app.put('/marketing/scheduled/:id/reschedule', async (req, res) => {
 
         await docRef.update({
             scheduled_at: new Date(scheduledAt),
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
+            updated_at: FieldValue.serverTimestamp()
         });
 
         res.json({ success: true, message: 'Campaign rescheduled successfully' });
@@ -1570,7 +1629,7 @@ exports.processScheduledCampaigns = functions.pubsub
                     await db.collection('marketing_campaigns').doc(campaign.id).update({
                         status: 'failed',
                         error_message: error.message,
-                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                        updated_at: FieldValue.serverTimestamp()
                     });
                 }
             }
