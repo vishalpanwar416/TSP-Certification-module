@@ -22,6 +22,7 @@ if (emailConfig.user && emailConfig.pass && emailConfig.user !== 'your_email@gma
         },
     });
 
+    /*
     // Verify connection
     transporter.verify((error, success) => {
         if (error) {
@@ -30,6 +31,7 @@ if (emailConfig.user && emailConfig.pass && emailConfig.user !== 'your_email@gma
             console.log('✅ Email service ready');
         }
     });
+    */
 } else {
     console.warn('⚠️  Email credentials not configured. Email features will be disabled.');
     console.warn('    Set them using: firebase functions:config:set email.user="YOUR_EMAIL" email.pass="YOUR_PASSWORD"');

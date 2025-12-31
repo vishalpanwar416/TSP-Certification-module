@@ -1,43 +1,4 @@
-// Marketing Service - Client-side API for Marketing Dashboard
-// Handles contacts, campaigns, templates, and scheduled messages
-
-const API_BASE_URL = import.meta.env.VITE_API_URL ||
-    'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
-
-/**
- * Make API request helper
- */
-async function apiRequest(endpoint, options = {}) {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const config = {
-        headers: {
-            'Content-Type': 'application/json',
-            ...options.headers,
-        },
-        ...options,
-    };
-
-    try {
-        const response = await fetch(url, config);
-        const data = await response.json();
-
-        if (!response.ok) {
-            const error = new Error(data.error || 'Request failed');
-            error.response = {
-                status: response.status,
-                data: data,
-            };
-            throw error;
-        }
-
-        return data.data !== undefined ? data.data : data;
-    } catch (error) {
-        if (error.response) {
-            throw error;
-        }
-        throw new Error(error.message || 'Network error occurred');
-    }
-}
+import { apiRequest } from '../utils/api';
 
 /**
  * Contacts API

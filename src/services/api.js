@@ -1,5 +1,4 @@
-// Re-export from Firebase service
-// This file now uses Firebase Firestore instead of a backend server
-
+// Re-export from services
 export { certificateAPI, healthCheck } from './firebaseService';
+export { default as marketingService } from './marketingService';
 export { default } from './firebaseService';

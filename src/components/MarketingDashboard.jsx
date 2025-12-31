@@ -41,8 +41,9 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '../contexts/AuthContext';
-import firebaseService from '../services/firebaseDirectService';
+import firebaseService from '../services/marketingService';
 import messagingService from '../services/messagingService';
+import PreviewCertificateModal from './PreviewCertificateModal';
 
 // Contact Upload Modal Component
 function ContactUploadModal({ onClose, onUpload }) {
@@ -106,7 +107,8 @@ function ContactUploadModal({ onClose, onUpload }) {
             await onUpload(file.data);
             onClose();
         } catch (error) {
-            alert('Failed to upload contacts');
+            // Error is handled by the onUpload callback (handleContactUpload)
+            console.error('Upload component error:', error);
         } finally {
             setUploading(false);
         }
@@ -434,6 +436,8 @@ function MarketingDashboard() {
     const [templates, setTemplates] = useState([]);
     const [showTemplateModal, setShowTemplateModal] = useState(false);
     const [scheduledCampaigns, setScheduledCampaigns] = useState([]);
+    const [previewCertificate, setPreviewCertificate] = useState(null);
+    const [showPreviewModal, setShowPreviewModal] = useState(false);
 
     // Load data from Firebase on mount
     useEffect(() => {
@@ -459,17 +463,6 @@ function MarketingDashboard() {
             updateStats(contactsData, campaignsData);
         } catch (error) {
             console.error('Error loading data from Firebase:', error);
-            // Fallback to localStorage if Firebase fails
-            const savedContacts = localStorage.getItem('marketing_contacts');
-            const savedCampaigns = localStorage.getItem('marketing_campaigns');
-            if (savedContacts) {
-                const parsed = JSON.parse(savedContacts);
-                setContacts(parsed);
-                updateStats(parsed, savedCampaigns ? JSON.parse(savedCampaigns) : []);
-            }
-            if (savedCampaigns) {
-                setCampaigns(JSON.parse(savedCampaigns));
-            }
         } finally {
             setLoading(false);
         }
@@ -502,7 +495,7 @@ function MarketingDashboard() {
             alert(`Successfully imported ${result.count} contacts to Firebase!`);
         } catch (error) {
             console.error('Error uploading contacts:', error);
-            alert('Failed to upload contacts. Please try again.');
+            alert(`Failed to upload contacts: ${error.message}`);
         } finally {
             setLoading(false);
         }
@@ -536,13 +529,7 @@ function MarketingDashboard() {
             setCampaigns(updatedCampaigns);
             updateStats(updatedContacts, updatedCampaigns);
 
-            // Show result message
-            const messageType = data.type === 'email' ? 'emails' : 'WhatsApp messages';
-            if (result.simulated) {
-                alert(`✅ Campaign recorded! ${result.sent}/${result.total} ${messageType} simulated.\n\n📝 Note: Actual sending requires Cloud Functions (Blaze plan).\n\nYou can also open WhatsApp Web or email client manually from the Contacts page.`);
-            } else {
-                alert(`✅ Successfully sent ${result.sent} ${messageType}!`);
-            }
+            alert(`✅ Successfully sent ${result.sent} messengers to ${result.total} contacts!`);
         } catch (error) {
             console.error('Error sending messages:', error);
             alert('Failed to send messages. Please try again.');
@@ -798,7 +785,18 @@ function MarketingDashboard() {
                         <Download size={28} />
                     </div>
                     <h3>Export Data</h3>
-                    <p>Download your contact list</p>
+                    <p>Download your contacts to Excel</p>
+                </div>
+                <div className="quick-action-card" onClick={() => {
+                    const sampleCert = contacts.length > 0 ? contacts[0] : { name: 'Your Name', certificateNumber: 'TSP123456', reraAwardeNo: 'RERA-789', professional: 'RERA CONSULTANT' };
+                    setPreviewCertificate(sampleCert);
+                    setShowPreviewModal(true);
+                }}>
+                    <div className="quick-action-icon preview">
+                        <Eye size={28} />
+                    </div>
+                    <h3>Preview Certificate</h3>
+                    <p>View the current certificate design</p>
                 </div>
             </div>
 
@@ -849,8 +847,8 @@ function MarketingDashboard() {
                                         <td className="message-preview">
                                             {campaign.subject || campaign.message.substring(0, 50) + '...'}
                                         </td>
-                                        <td>{campaign.sentCount}</td>
-                                        <td>{new Date(campaign.createdAt).toLocaleDateString()}</td>
+                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
+                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
                                         <td>
                                             <span className="badge badge-success">
                                                 <CheckCircle size={12} />
@@ -923,8 +921,8 @@ function MarketingDashboard() {
                                                 <strong>{contact.name || 'Unknown'}</strong>
                                             </div>
                                         </td>
-                                        <td><code className="certificate-code">{contact.certificateNumber || '-'}</code></td>
-                                        <td>{contact.reraAwardeNo || '-'}</td>
+                                        <td><code className="certificate-code">{contact.certificate_number || contact.certificateNumber || '-'}</code></td>
+                                        <td>{contact.rera_awarde_no || contact.reraAwardeNo || '-'}</td>
                                         <td>{contact.professional || '-'}</td>
                                         <td>{contact.email || '-'}</td>
                                         <td>{contact.phone || '-'}</td>
@@ -948,6 +946,16 @@ function MarketingDashboard() {
                                                         <MessageCircle size={16} />
                                                     </button>
                                                 )}
+                                                <button
+                                                    className="action-btn action-btn-preview"
+                                                    title="Preview Certificate"
+                                                    onClick={() => {
+                                                        setPreviewCertificate(contact);
+                                                        setShowPreviewModal(true);
+                                                    }}
+                                                >
+                                                    <Eye size={16} />
+                                                </button>
                                                 <button
                                                     className="action-btn action-btn-delete"
                                                     onClick={() => handleDeleteContact(contact.id)}
@@ -1018,8 +1026,8 @@ function MarketingDashboard() {
                                 {campaigns.filter(c => c.type === 'email').reverse().map((campaign) => (
                                     <tr key={campaign.id}>
                                         <td>{campaign.subject}</td>
-                                        <td>{campaign.sentCount}</td>
-                                        <td>{new Date(campaign.createdAt).toLocaleDateString()}</td>
+                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
+                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
                                         <td>
                                             <span className="badge badge-success">
                                                 <CheckCircle size={12} />
@@ -1087,8 +1095,8 @@ function MarketingDashboard() {
                                 {campaigns.filter(c => c.type === 'whatsapp').reverse().map((campaign) => (
                                     <tr key={campaign.id}>
                                         <td className="message-preview">{campaign.message.substring(0, 50)}...</td>
-                                        <td>{campaign.sentCount}</td>
-                                        <td>{new Date(campaign.createdAt).toLocaleDateString()}</td>
+                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
+                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
                                         <td>
                                             <span className="badge badge-success">
                                                 <CheckCircle size={12} />
@@ -1401,8 +1409,8 @@ function MarketingDashboard() {
                                         <td className="message-preview">
                                             {campaign.subject || campaign.message.substring(0, 50) + '...'}
                                         </td>
-                                        <td>{campaign.sentCount}</td>
-                                        <td>{new Date(campaign.createdAt).toLocaleDateString()}</td>
+                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
+                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
                                         <td>
                                             <span className="badge badge-success">
                                                 <CheckCircle size={12} />
@@ -1629,6 +1637,13 @@ function MarketingDashboard() {
                     contacts={contacts}
                     onClose={() => setShowComposeModal(false)}
                     onSend={handleSendMessages}
+                />
+            )}
+
+            {showPreviewModal && (
+                <PreviewCertificateModal
+                    certificate={previewCertificate}
+                    onClose={() => setShowPreviewModal(false)}
                 />
             )}
         </div>

@@ -1,5 +1,7 @@
 {
   "projects": {
     "default": "channel-partner-54334"
-  }
+  },
+  "targets": {},
+  "etags": {}
 }

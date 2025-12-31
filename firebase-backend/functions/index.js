@@ -15,8 +15,22 @@ const storage = admin.storage();
 
 // Create Express app
 const app = express();
-app.use(cors({ origin: true }));
-app.use(express.json());
+
+// Configure CORS
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+    }
+    next();
+});
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // ============================================
 // CERTIFICATE CRUD OPERATIONS (Existing)
@@ -69,6 +83,8 @@ app.post('/certificates', async (req, res) => {
             email: email || null,
             whatsapp_sent: false,
             whatsapp_sent_at: null,
+            email_sent: false,
+            email_sent_at: null,
             created_at: admin.firestore.FieldValue.serverTimestamp(),
             updated_at: admin.firestore.FieldValue.serverTimestamp()
         };
@@ -360,6 +376,13 @@ app.post('/certificates/:id/send-email', async (req, res) => {
             certificate
         );
 
+        // Update email status
+        await db.collection('certificates').doc(id).update({
+            email_sent: true,
+            email_sent_at: admin.firestore.FieldValue.serverTimestamp(),
+            updated_at: admin.firestore.FieldValue.serverTimestamp()
+        });
+
         res.json({
             success: true,
             message: 'Certificate sent via email successfully',
@@ -412,15 +435,21 @@ app.get('/certificates/stats', async (req, res) => {
         const total = allDocs.size;
 
         let whatsapp_sent = 0;
+        let email_sent = 0;
         allDocs.forEach(doc => {
-            if (doc.data().whatsapp_sent) {
+            const data = doc.data();
+            if (data.whatsapp_sent) {
                 whatsapp_sent++;
+            }
+            if (data.email_sent) {
+                email_sent++;
             }
         });
 
         const stats = {
             total,
             whatsapp_sent,
+            email_sent,
             pending: total - whatsapp_sent
         };
 
@@ -432,6 +461,218 @@ app.get('/certificates/stats', async (req, res) => {
         console.error('Error fetching stats:', error);
         res.status(500).json({
             error: 'Failed to fetch statistics',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Bulk send certificates via WhatsApp and/or Email
+ * POST /certificates/bulk-send
+ * Body: {
+ *   certificate_ids: string[],
+ *   send_whatsapp: boolean,
+ *   send_email: boolean,
+ *   phone_numbers?: { [certificate_id]: string },
+ *   emails?: { [certificate_id]: string },
+ *   custom_whatsapp_message?: string,
+ *   custom_email_subject?: string,
+ *   custom_email_body?: string
+ * }
+ */
+app.post('/certificates/bulk-send', async (req, res) => {
+    try {
+        const {
+            certificate_ids,
+            send_whatsapp = false,
+            send_email = false,
+            phone_numbers = {},
+            emails = {},
+            custom_whatsapp_message,
+            custom_email_subject,
+            custom_email_body
+        } = req.body;
+
+        if (!Array.isArray(certificate_ids) || certificate_ids.length === 0) {
+            return res.status(400).json({
+                error: 'certificate_ids array is required and must not be empty'
+            });
+        }
+
+        if (!send_whatsapp && !send_email) {
+            return res.status(400).json({
+                error: 'At least one of send_whatsapp or send_email must be true'
+            });
+        }
+
+        // Check service configuration
+        if (send_whatsapp && !isWhatsAppConfigured()) {
+            return res.status(503).json({
+                error: 'WhatsApp service is not configured',
+                configured: false
+            });
+        }
+
+        if (send_email && !isEmailConfigured()) {
+            return res.status(503).json({
+                error: 'Email service is not configured',
+                configured: false
+            });
+        }
+
+        // Fetch all certificates
+        const certificatePromises = certificate_ids.map(id =>
+            db.collection('certificates').doc(id).get()
+        );
+        const certificateDocs = await Promise.all(certificatePromises);
+        const certificates = certificateDocs
+            .filter(doc => doc.exists)
+            .map(doc => ({ id: doc.id, ...doc.data() }));
+
+        if (certificates.length === 0) {
+            return res.status(404).json({
+                error: 'No valid certificates found'
+            });
+        }
+
+        const results = {
+            total: certificates.length,
+            whatsapp: { sent: 0, failed: 0, errors: [] },
+            email: { sent: 0, failed: 0, errors: [] }
+        };
+
+        const batch = db.batch();
+
+        // Process each certificate
+        for (const certificate of certificates) {
+            const certId = certificate.id;
+            const recipientPhone = phone_numbers[certId] || certificate.phone_number;
+            const recipientEmail = emails[certId] || certificate.email;
+
+            // Send via WhatsApp
+            if (send_whatsapp && recipientPhone) {
+                try {
+                    let message = custom_whatsapp_message;
+                    if (!message) {
+                        message = `🎉 *Congratulations ${certificate.recipient_name}!*\n\n` +
+                            `You have been awarded a Certificate of Appreciation from *Top Selling Property*.\n\n` +
+                            `📜 *Certificate Number:* ${certificate.certificate_number}\n` +
+                            (certificate.award_rera_number ? `🏆 *Award RERA Number:* ${certificate.award_rera_number}\n` : '') +
+                            `\n📥 *Download your certificate:*\n${certificate.pdf_url}\n\n` +
+                            `Thank you for your commitment and excellence!\n\n` +
+                            `*www.topsellingproperty.com*`;
+                    } else {
+                        // Replace template variables
+                        message = message
+                            .replace(/\{\{name\}\}/gi, certificate.recipient_name || 'there')
+                            .replace(/\{\{certificate_number\}\}/gi, certificate.certificate_number || '')
+                            .replace(/\{\{rera_number\}\}/gi, certificate.award_rera_number || '')
+                            .replace(/\{\{certificate_url\}\}/gi, certificate.pdf_url || '');
+                    }
+
+                    await sendBulkWhatsApp(recipientPhone, message);
+
+                    // Update certificate status
+                    const certRef = db.collection('certificates').doc(certId);
+                    batch.update(certRef, {
+                        whatsapp_sent: true,
+                        whatsapp_sent_at: admin.firestore.FieldValue.serverTimestamp(),
+                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                    });
+
+                    results.whatsapp.sent++;
+                } catch (error) {
+                    console.error(`Failed to send WhatsApp for certificate ${certId}:`, error);
+                    results.whatsapp.failed++;
+                    results.whatsapp.errors.push({
+                        certificate_id: certId,
+                        recipient: recipientPhone,
+                        error: error.message
+                    });
+                }
+            } else if (send_whatsapp && !recipientPhone) {
+                results.whatsapp.failed++;
+                results.whatsapp.errors.push({
+                    certificate_id: certId,
+                    recipient: null,
+                    error: 'No phone number available'
+                });
+            }
+
+            // Send via Email
+            if (send_email && recipientEmail) {
+                try {
+                    let subject = custom_email_subject;
+                    let body = custom_email_body;
+
+                    if (!subject) {
+                        subject = `🎉 Certificate of Appreciation - ${certificate.certificate_number}`;
+                    } else {
+                        subject = subject
+                            .replace(/\{\{name\}\}/gi, certificate.recipient_name || 'there')
+                            .replace(/\{\{certificate_number\}\}/gi, certificate.certificate_number || '')
+                            .replace(/\{\{rera_number\}\}/gi, certificate.award_rera_number || '');
+                    }
+
+                    if (!body) {
+                        body = `Dear ${certificate.recipient_name},\n\n` +
+                            `We are delighted to inform you that you have been awarded a Certificate of Appreciation from Top Selling Property.\n\n` +
+                            `Certificate Number: ${certificate.certificate_number}\n` +
+                            (certificate.award_rera_number ? `Award RERA Number: ${certificate.award_rera_number}\n` : '') +
+                            `\nDownload your certificate: ${certificate.pdf_url}\n\n` +
+                            `Thank you for your outstanding contribution!\n\n` +
+                            `Top Selling Property\nwww.topsellingproperty.com`;
+                    } else {
+                        // Replace template variables
+                        body = body
+                            .replace(/\{\{name\}\}/gi, certificate.recipient_name || 'there')
+                            .replace(/\{\{certificate_number\}\}/gi, certificate.certificate_number || '')
+                            .replace(/\{\{rera_number\}\}/gi, certificate.award_rera_number || '')
+                            .replace(/\{\{certificate_url\}\}/gi, certificate.pdf_url || '');
+                    }
+
+                    await sendBulkEmail(recipientEmail, subject, body);
+
+                    // Update certificate status
+                    const certRef = db.collection('certificates').doc(certId);
+                    batch.update(certRef, {
+                        email_sent: true,
+                        email_sent_at: admin.firestore.FieldValue.serverTimestamp(),
+                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                    });
+
+                    results.email.sent++;
+                } catch (error) {
+                    console.error(`Failed to send Email for certificate ${certId}:`, error);
+                    results.email.failed++;
+                    results.email.errors.push({
+                        certificate_id: certId,
+                        recipient: recipientEmail,
+                        error: error.message
+                    });
+                }
+            } else if (send_email && !recipientEmail) {
+                results.email.failed++;
+                results.email.errors.push({
+                    certificate_id: certId,
+                    recipient: null,
+                    error: 'No email address available'
+                });
+            }
+        }
+
+        // Commit all batch updates
+        await batch.commit();
+
+        res.json({
+            success: true,
+            message: 'Bulk send completed',
+            data: results
+        });
+    } catch (error) {
+        console.error('Error in bulk send:', error);
+        res.status(500).json({
+            error: 'Failed to send certificates in bulk',
             details: error.message
         });
     }
@@ -555,19 +796,22 @@ app.post('/marketing/contacts/bulk', async (req, res) => {
             return res.status(400).json({ error: 'Contacts array is required' });
         }
 
-        const batch = db.batch();
+        const BATCH_SIZE = 500;
         const importedContacts = [];
+        let currentBatch = db.batch();
+        let operationCount = 0;
 
-        for (const contact of contacts) {
+        for (let i = 0; i < contacts.length; i++) {
+            const contact = contacts[i];
             const id = uuidv4();
             const contactData = {
                 id,
-                name: contact.name || contact.Name || '',
-                email: contact.email || contact.Email || '',
-                phone: contact.phone || contact.Phone || contact['Phone Number'] || contact['Phone number'] || '',
-                rera_awarde_no: contact['RERA Awarde No.'] || contact['RERA Awarde No'] || contact.reraAwardeNo || '',
-                certificate_number: contact['Certificate Number'] || contact.certificateNumber || '',
-                professional: contact.Professional || contact.professional || '',
+                name: contact.name || contact.Name || contact['AWARDE NAME'] || contact['Awarde Name'] || '',
+                email: contact.email || contact.Email || contact.EMAIL || '',
+                phone: String(contact.phone || contact.Phone || contact['Phone Number'] || contact['Phone number'] || contact.Whatsapp || contact.whatsapp || contact.WHATSAPP || contact['WhatsApp'] || ''),
+                rera_awarde_no: contact['AWARDE RERA REGISTRATION NO.'] || contact['RERA Awarde No.'] || contact['RERA Awarde No'] || contact.reraAwardeNo || contact['Rera No'] || '',
+                certificate_number: contact['CERTIFICATE NUMBER'] || contact['Certificate Number'] || contact.certificateNumber || '',
+                professional: contact['AWARDE PROFESSION'] || contact.Professional || contact.professional || contact.Profession || '',
                 tags: contact.tags || [],
                 email_sent_count: 0,
                 whatsapp_sent_count: 0,
@@ -576,16 +820,27 @@ app.post('/marketing/contacts/bulk', async (req, res) => {
                 updated_at: admin.firestore.FieldValue.serverTimestamp()
             };
 
-            batch.set(db.collection('marketing_contacts').doc(id), contactData);
+            currentBatch.set(db.collection('marketing_contacts').doc(id), contactData);
             importedContacts.push(contactData);
+            operationCount++;
+
+            // If batch is full, commit and start a new one
+            if (operationCount === BATCH_SIZE) {
+                await currentBatch.commit();
+                currentBatch = db.batch();
+                operationCount = 0;
+            }
         }
 
-        await batch.commit();
+        // Commit any remaining operations
+        if (operationCount > 0) {
+            await currentBatch.commit();
+        }
 
         res.status(201).json({
             success: true,
             message: `Successfully imported ${importedContacts.length} contacts`,
-            data: { count: importedContacts.length }
+            data: { count: importedContacts.length, contacts: importedContacts }
         });
     } catch (error) {
         console.error('Error bulk importing contacts:', error);
@@ -1328,4 +1583,7 @@ exports.processScheduledCampaigns = functions.pubsub
     });
 
 // Export the Express app as a Cloud Function
-exports.api = functions.https.onRequest(app);
+exports.api = functions.runWith({
+    timeoutSeconds: 300,
+    memory: '1GB'
+}).https.onRequest(app);
