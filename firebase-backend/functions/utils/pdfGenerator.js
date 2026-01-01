@@ -136,25 +136,69 @@ const getCertificateHTML = (data, imageDataUrl) => {
 
 /**
  * Generate PDF certificate and return as Buffer
+ * @param {Object} certificateData - Certificate data
+ * @param {string} templateUrl - Optional template image URL (from Firebase Storage)
  */
-const generateCertificatePDF = async (certificateData) => {
+const generateCertificatePDF = async (certificateData, templateUrl = null) => {
   let browser;
 
   try {
-    // Load the background image
-    const imagePath = path.join(__dirname, '..', 'assets', 'Certificate.jpg');
     let imageDataUrl = '';
 
-    try {
-      if (fs.existsSync(imagePath)) {
-        const imageBase64 = fs.readFileSync(imagePath).toString('base64');
-        imageDataUrl = `data:image/jpeg;base64,${imageBase64}`;
-      } else {
-        console.warn('⚠️ Background image not found at:', imagePath);
-        // Fallback to a placeholder or empty string
+    // If template URL is provided, use it
+    if (templateUrl) {
+      try {
+        // Fetch the image from URL and convert to base64
+        const https = require('https');
+        const http = require('http');
+        const url = require('url');
+        
+        const fetchImage = () => {
+          return new Promise((resolve, reject) => {
+            const parsedUrl = url.parse(templateUrl);
+            const client = parsedUrl.protocol === 'https:' ? https : http;
+            
+            client.get(templateUrl, (response) => {
+              if (response.statusCode !== 200) {
+                reject(new Error(`Failed to fetch image: ${response.statusCode}`));
+                return;
+              }
+              
+              const chunks = [];
+              response.on('data', (chunk) => chunks.push(chunk));
+              response.on('end', () => {
+                const buffer = Buffer.concat(chunks);
+                const base64 = buffer.toString('base64');
+                const contentType = response.headers['content-type'] || 'image/jpeg';
+                resolve(`data:${contentType};base64,${base64}`);
+              });
+            }).on('error', reject);
+          });
+        };
+        
+        imageDataUrl = await fetchImage();
+        console.log('✅ Using uploaded certificate template');
+      } catch (err) {
+        console.warn('⚠️ Failed to load template from URL, falling back to default:', err.message);
+        // Fallback to default
+        imageDataUrl = '';
       }
-    } catch (err) {
-      console.error('Error reading background image:', err);
+    }
+
+    // Fallback to default image if no template URL or if URL loading failed
+    if (!imageDataUrl) {
+      const imagePath = path.join(__dirname, '..', 'assets', 'Certificate.jpg');
+      try {
+        if (fs.existsSync(imagePath)) {
+          const imageBase64 = fs.readFileSync(imagePath).toString('base64');
+          imageDataUrl = `data:image/jpeg;base64,${imageBase64}`;
+          console.log('✅ Using default certificate template');
+        } else {
+          console.warn('⚠️ Background image not found at:', imagePath);
+        }
+      } catch (err) {
+        console.error('Error reading background image:', err);
+      }
     }
 
     browser = await puppeteer.launch({

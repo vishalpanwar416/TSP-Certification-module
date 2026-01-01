@@ -15,11 +15,18 @@ function PreviewCertificateModal({ certificate, onClose }) {
     const generatePreview = async () => {
         setLoading(true);
         try {
-            const url = await generateCertificateDataUrl(certificate);
-            setPreviewUrl(url);
+            // For default certificate, use the template URL directly
+            if (certificate.id === 'default' || certificate.is_default) {
+                const url = certificate.pdf_url || '/Certificate.jpg';
+                setPreviewUrl(url);
+                setLoading(false);
+            } else {
+                const url = await generateCertificateDataUrl(certificate);
+                setPreviewUrl(url);
+                setLoading(false);
+            }
         } catch (error) {
             console.error('Error generating certificate preview:', error);
-        } finally {
             setLoading(false);
         }
     };

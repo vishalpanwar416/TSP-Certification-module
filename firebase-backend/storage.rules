@@ -6,5 +6,11 @@ service firebase.storage {
       allow read: if true;
       allow write: if true;
     }
+    
+    // Certificate templates folder - Allow all for now (add auth later)
+    match /certificate-templates/{fileName} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }

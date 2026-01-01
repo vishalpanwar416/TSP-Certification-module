@@ -32,6 +32,80 @@ import SendCertificateModal from './SendCertificateModal';
 import PreviewCertificateModal from './PreviewCertificateModal';
 import { useAuth } from '../contexts/AuthContext';
 
+// Utility function to safely parse Firestore timestamps
+const parseFirestoreDate = (timestamp) => {
+    if (!timestamp) return null;
+    
+    // If it's already a Date object
+    if (timestamp instanceof Date) {
+        return timestamp;
+    }
+    
+    // If it's a Firestore Timestamp object with seconds property (from Admin SDK)
+    if (timestamp.seconds !== undefined) {
+        return new Date(timestamp.seconds * 1000 + (timestamp.nanoseconds || 0) / 1000000);
+    }
+    
+    // If it's a Firestore Timestamp object with _seconds property (serialized format)
+    if (timestamp._seconds !== undefined) {
+        return new Date(timestamp._seconds * 1000 + (timestamp._nanoseconds || 0) / 1000000);
+    }
+    
+    // If it's a Firestore Timestamp object with toDate method
+    if (typeof timestamp.toDate === 'function') {
+        return timestamp.toDate();
+    }
+    
+    // If it's a number (milliseconds or seconds)
+    if (typeof timestamp === 'number') {
+        // If it's less than 1e12, it's likely seconds, otherwise milliseconds
+        return new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp);
+    }
+    
+    // If it's a string, try to parse it
+    if (typeof timestamp === 'string') {
+        const parsed = new Date(timestamp);
+        if (!isNaN(parsed.getTime())) {
+            return parsed;
+        }
+    }
+    
+    // If it's an object with a toMillis method (Firestore Timestamp)
+    if (timestamp && typeof timestamp.toMillis === 'function') {
+        return new Date(timestamp.toMillis());
+    }
+    
+    return null;
+};
+
+// Format date safely
+const formatDate = (timestamp, options = {}) => {
+    const date = parseFirestoreDate(timestamp);
+    if (!date) return 'N/A';
+    
+    const defaultOptions = { 
+        year: 'numeric', 
+        month: 'short', 
+        day: 'numeric' 
+    };
+    
+    return date.toLocaleDateString('en-US', { ...defaultOptions, ...options });
+};
+
+// Format date and time safely
+const formatDateTime = (timestamp) => {
+    const date = parseFirestoreDate(timestamp);
+    if (!date) return 'N/A';
+    
+    return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+};
+
 function Dashboard() {
     const { logout, user } = useAuth();
     const [certificates, setCertificates] = useState([]);
@@ -130,7 +204,7 @@ function Dashboard() {
 
     // Handle download
     const handleDownload = (certificate) => {
-        const content = `Certificate Details\n==================\nRecipient: ${certificate.recipient_name}\nCertificate Number: ${certificate.certificate_number}\nRERA Number: ${certificate.award_rera_number || 'N/A'}\nDescription: ${certificate.description || 'N/A'}\nPhone: ${certificate.phone_number || 'N/A'}\nStatus: ${certificate.whatsapp_sent ? 'Sent' : 'Pending'}\nCreated: ${new Date(certificate.created_at).toLocaleDateString()}`;
+        const content = `Certificate Details\n==================\nRecipient: ${certificate.recipient_name}\nCertificate Number: ${certificate.certificate_number}\nRERA Number: ${certificate.award_rera_number || 'N/A'}\nDescription: ${certificate.description || 'N/A'}\nPhone: ${certificate.phone_number || 'N/A'}\nStatus: ${certificate.whatsapp_sent ? 'Sent' : 'Pending'}\nCreated: ${formatDate(certificate.created_at)}`;
         const blob = new Blob([content], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -580,7 +654,7 @@ function Dashboard() {
                                                 </td>
                                                 <td>
                                                     <span className="date-cell">
-                                                        {new Date(cert.created_at).toLocaleDateString()}
+                                                        {formatDate(cert.created_at)}
                                                     </span>
                                                 </td>
                                                 <td>
@@ -705,7 +779,7 @@ function Dashboard() {
                                 </div>
                                 <div className="preview-item">
                                     <label>Created</label>
-                                    <p className="preview-value">{new Date(selectedCertificate.created_at).toLocaleString()}</p>
+                                    <p className="preview-value">{formatDateTime(selectedCertificate.created_at)}</p>
                                 </div>
                             </div>
                         </div>

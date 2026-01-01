@@ -37,13 +37,111 @@ import {
     Calendar,
     Save,
     BookOpen,
-    ExternalLink
+    ExternalLink,
+    Award,
+    FileImage,
+    File,
+    PieChart,
+    Image
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '../contexts/AuthContext';
 import firebaseService from '../services/marketingService';
 import messagingService from '../services/messagingService';
+import notificationsService from '../services/notificationsService';
+import { certificateAPI } from '../services/api';
 import PreviewCertificateModal from './PreviewCertificateModal';
+
+// Utility function to safely parse Firestore timestamps
+const parseFirestoreDate = (timestamp) => {
+    if (!timestamp) return null;
+    
+    // If it's already a Date object
+    if (timestamp instanceof Date) {
+        return timestamp;
+    }
+    
+    // If it's a Firestore Timestamp object with seconds property (from Admin SDK)
+    if (timestamp.seconds !== undefined) {
+        return new Date(timestamp.seconds * 1000 + (timestamp.nanoseconds || 0) / 1000000);
+    }
+    
+    // If it's a Firestore Timestamp object with _seconds property (serialized format)
+    if (timestamp._seconds !== undefined) {
+        return new Date(timestamp._seconds * 1000 + (timestamp._nanoseconds || 0) / 1000000);
+    }
+    
+    // If it's a Firestore Timestamp object with toDate method
+    if (typeof timestamp.toDate === 'function') {
+        return timestamp.toDate();
+    }
+    
+    // If it's a number (milliseconds or seconds)
+    if (typeof timestamp === 'number') {
+        // If it's less than 1e12, it's likely seconds, otherwise milliseconds
+        return new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp);
+    }
+    
+    // If it's a string, try to parse it
+    if (typeof timestamp === 'string') {
+        const parsed = new Date(timestamp);
+        if (!isNaN(parsed.getTime())) {
+            return parsed;
+        }
+    }
+    
+    // If it's an object with a toMillis method (Firestore Timestamp)
+    if (timestamp && typeof timestamp.toMillis === 'function') {
+        return new Date(timestamp.toMillis());
+    }
+    
+    return null;
+};
+
+// Format date safely
+const formatDate = (timestamp, options = {}) => {
+    const date = parseFirestoreDate(timestamp);
+    if (!date || isNaN(date.getTime())) {
+        // If timestamp is missing or invalid, try to show current date as fallback
+        // This handles cases where the timestamp hasn't been resolved yet
+        if (timestamp === null || timestamp === undefined) {
+            return 'N/A';
+        }
+        // Log for debugging
+        console.warn('Invalid date format:', timestamp);
+        return 'N/A';
+    }
+    
+    const defaultOptions = { 
+        year: 'numeric', 
+        month: 'short', 
+        day: 'numeric' 
+    };
+    
+    return date.toLocaleDateString('en-US', { ...defaultOptions, ...options });
+};
+
+// Format date and time safely
+const formatDateTime = (timestamp) => {
+    const date = parseFirestoreDate(timestamp);
+    if (!date || isNaN(date.getTime())) {
+        // If timestamp is missing or invalid, try to show current date as fallback
+        if (timestamp === null || timestamp === undefined) {
+            return 'N/A';
+        }
+        // Log for debugging
+        console.warn('Invalid date format:', timestamp);
+        return 'N/A';
+    }
+    
+    return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+};
 
 // Contact Upload Modal Component
 function ContactUploadModal({ onClose, onUpload }) {
@@ -230,13 +328,17 @@ function ContactUploadModal({ onClose, onUpload }) {
 }
 
 // Campaign Compose Modal
-function ComposeModal({ type, contacts, onClose, onSend }) {
+function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
     const [subject, setSubject] = useState('');
     const [message, setMessage] = useState('');
     const [selectedContacts, setSelectedContacts] = useState([]);
     const [selectAll, setSelectAll] = useState(false);
     const [sending, setSending] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [includeCertificate, setIncludeCertificate] = useState(false);
+    const [selectedCertificate, setSelectedCertificate] = useState('');
+    const [formatPDF, setFormatPDF] = useState(true);
+    const [formatJPG, setFormatJPG] = useState(false);
 
     const filteredContacts = contacts.filter(contact =>
         contact.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -274,6 +376,17 @@ function ComposeModal({ type, contacts, onClose, onSend }) {
             alert('Please enter a subject for email');
             return;
         }
+        if (includeCertificate && !selectedCertificate) {
+            alert('Please select a certificate to include');
+            return;
+        }
+        if (includeCertificate && selectedCertificate === 'default') {
+            // Default certificate is always available, no need to validate further
+        }
+        if (includeCertificate && !formatPDF && !formatJPG) {
+            alert('Please select at least one format (PDF or JPG)');
+            return;
+        }
 
         setSending(true);
         try {
@@ -281,7 +394,14 @@ function ComposeModal({ type, contacts, onClose, onSend }) {
                 type,
                 subject,
                 message,
-                contactIds: selectedContacts
+                contactIds: selectedContacts,
+                includeCertificate: includeCertificate && selectedCertificate ? {
+                    certificateId: selectedCertificate,
+                    formats: {
+                        pdf: formatPDF,
+                        jpg: formatJPG
+                    }
+                } : null
             });
             onClose();
         } catch (error) {
@@ -384,6 +504,104 @@ function ComposeModal({ type, contacts, onClose, onSend }) {
                             <Zap size={16} />
                             <span>Use <code>{'{{name}}'}</code> to personalize with recipient's name</span>
                         </div>
+                        
+                        {/* Certificate Attachment Section */}
+                        <div className="form-group" style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontWeight: '500' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={includeCertificate}
+                                    onChange={(e) => {
+                                        setIncludeCertificate(e.target.checked);
+                                        if (!e.target.checked) {
+                                            setSelectedCertificate('');
+                                        }
+                                    }}
+                                />
+                                <Award size={18} />
+                                <span>Include Certificate</span>
+                            </label>
+                            
+                            {includeCertificate && (
+                                <div style={{ marginTop: '0.75rem' }}>
+                                    <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
+                                            Select Certificate
+                                        </label>
+                                        <select
+                                            className="form-input"
+                                            value={selectedCertificate}
+                                            onChange={(e) => setSelectedCertificate(e.target.value)}
+                                            style={{ width: '100%' }}
+                                        >
+                                            <option value="">-- Select a certificate --</option>
+                                            <option value="default">
+                                                📄 Default Certificate Template
+                                            </option>
+                                            {certificates.length > 0 && (
+                                                <optgroup label="Generated Certificates">
+                                                    {certificates.map(cert => (
+                                                        <option key={cert.id} value={cert.id}>
+                                                            {cert.certificate_number} - {cert.recipient_name}
+                                                        </option>
+                                                    ))}
+                                                </optgroup>
+                                            )}
+                                        </select>
+                                        {selectedCertificate === 'default' && (
+                                            <small style={{ 
+                                                display: 'block', 
+                                                marginTop: '0.5rem', 
+                                                fontSize: '0.75rem', 
+                                                color: 'var(--info)',
+                                                fontStyle: 'italic'
+                                            }}>
+                                                Using the default certificate template from the public folder
+                                            </small>
+                                        )}
+                                    </div>
+                                    
+                                    <div style={{ marginTop: '0.75rem' }}>
+                                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
+                                            Certificate Format
+                                        </label>
+                                        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={formatPDF}
+                                                    onChange={(e) => {
+                                                        setFormatPDF(e.target.checked);
+                                                        if (!e.target.checked && !formatJPG) {
+                                                            setFormatJPG(true);
+                                                        }
+                                                    }}
+                                                />
+                                                <File size={16} />
+                                                <span>PDF</span>
+                                            </label>
+                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={formatJPG}
+                                                    onChange={(e) => {
+                                                        setFormatJPG(e.target.checked);
+                                                        if (!e.target.checked && !formatPDF) {
+                                                            setFormatPDF(true);
+                                                        }
+                                                    }}
+                                                />
+                                                <FileImage size={16} />
+                                                <span>JPG</span>
+                                            </label>
+                                        </div>
+                                        <p style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#9ca3af' }}>
+                                            Select at least one format. Both formats can be selected.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
                 <div className="modal-footer">
@@ -415,6 +633,7 @@ function MarketingDashboard() {
     const { logout, user } = useAuth();
     const [contacts, setContacts] = useState([]);
     const [campaigns, setCampaigns] = useState([]);
+    const [certificates, setCertificates] = useState([]);
     const [stats, setStats] = useState({
         totalContacts: 0,
         emailsSent: 0,
@@ -438,11 +657,71 @@ function MarketingDashboard() {
     const [scheduledCampaigns, setScheduledCampaigns] = useState([]);
     const [previewCertificate, setPreviewCertificate] = useState(null);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [showNotifications, setShowNotifications] = useState(false);
+    const [notifications, setNotifications] = useState([]);
+    const [unreadCount, setUnreadCount] = useState(0);
+    const [certificateSearchQuery, setCertificateSearchQuery] = useState('');
+    const [certificateTemplate, setCertificateTemplate] = useState(null);
+    const [templateUploading, setTemplateUploading] = useState(false);
+    const [showTemplateUpload, setShowTemplateUpload] = useState(false);
 
     // Load data from Firebase on mount
     useEffect(() => {
         loadDataFromFirebase();
+        loadNotifications();
     }, []);
+
+    // Load notifications from backend
+    const loadNotifications = async () => {
+        try {
+            const response = await notificationsService.getAll({ limit: 20 });
+            setNotifications(response.data || response || []);
+            setUnreadCount(response.unreadCount || 0);
+        } catch (error) {
+            console.error('Error loading notifications:', error);
+            setNotifications([]);
+            setUnreadCount(0);
+        }
+    };
+
+    // Refresh notifications periodically
+    useEffect(() => {
+        const interval = setInterval(() => {
+            loadNotifications();
+        }, 30000); // Refresh every 30 seconds
+
+        return () => clearInterval(interval);
+    }, []);
+
+    // Load certificate template when certificates tab is active
+    useEffect(() => {
+        const loadCertificateTemplate = async () => {
+            try {
+                const apiUrl = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
+                const response = await fetch(`${apiUrl}/certificates/template`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        // Set template data, even if it's null (means using default)
+                        if (data.data && data.data.url && !data.data.isDefault) {
+                            setCertificateTemplate(data.data);
+                        } else {
+                            // Using default template
+                            setCertificateTemplate(null);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading template:', error);
+                // On error, assume using default
+                setCertificateTemplate(null);
+            }
+        };
+
+        if (activeTab === 'certificates') {
+            loadCertificateTemplate();
+        }
+    }, [activeTab]);
 
     const loadDataFromFirebase = async () => {
         setLoading(true);
@@ -458,6 +737,15 @@ function MarketingDashboard() {
             // Load templates
             const templatesData = await firebaseService.templates.getAll();
             setTemplates(templatesData);
+
+            // Load certificates
+            try {
+                const certificatesData = await certificateAPI.getAll();
+                setCertificates(Array.isArray(certificatesData) ? certificatesData : []);
+            } catch (error) {
+                console.error('Error loading certificates:', error);
+                setCertificates([]);
+            }
 
             // Update stats
             updateStats(contactsData, campaignsData);
@@ -479,6 +767,58 @@ function MarketingDashboard() {
             openRate: emailsSent > 0 ? Math.round((emailsSent * 0.65)) : 0,
             campaigns: campaignList.length
         });
+    };
+
+    // Helper function to render campaign status badge
+    const renderStatusBadge = (campaign) => {
+        const status = campaign.status || 'pending';
+        const sentCount = campaign.sent_count || campaign.sentCount || 0;
+        const failedCount = campaign.failed_count || campaign.failedCount || 0;
+        const total = campaign.recipient_count || campaign.recipientCount || 0;
+
+        if (status === 'completed' && sentCount > 0 && failedCount === 0) {
+            return (
+                <span className="badge badge-success">
+                    <CheckCircle size={12} />
+                    Sent
+                </span>
+            );
+        } else if (status === 'failed' || (sentCount === 0 && failedCount > 0)) {
+            return (
+                <span className="badge badge-error" style={{ backgroundColor: '#ef4444', color: 'white' }}>
+                    <AlertCircle size={12} />
+                    Failed
+                </span>
+            );
+        } else if (status === 'partial' || (sentCount > 0 && failedCount > 0)) {
+            return (
+                <span className="badge badge-warning" style={{ backgroundColor: '#f59e0b', color: 'white' }}>
+                    <AlertCircle size={12} />
+                    Partial ({sentCount}/{total})
+                </span>
+            );
+        } else if (status === 'scheduled') {
+            return (
+                <span className="badge badge-info" style={{ backgroundColor: '#3b82f6', color: 'white' }}>
+                    <Clock size={12} />
+                    Scheduled
+                </span>
+            );
+        } else if (status === 'pending') {
+            return (
+                <span className="badge badge-warning" style={{ backgroundColor: '#6b7280', color: 'white' }}>
+                    <Clock size={12} />
+                    Pending
+                </span>
+            );
+        } else {
+            return (
+                <span className="badge badge-info">
+                    <Clock size={12} />
+                    {status}
+                </span>
+            );
+        }
     };
 
     // Handle contact upload - Save to Firebase
@@ -514,7 +854,8 @@ function MarketingDashboard() {
                     type: data.type,
                     subject: data.subject,
                     message: data.message,
-                    contactIds: data.contactIds
+                    contactIds: data.contactIds,
+                    includeCertificate: data.includeCertificate
                 },
                 contacts
             );
@@ -529,7 +870,18 @@ function MarketingDashboard() {
             setCampaigns(updatedCampaigns);
             updateStats(updatedContacts, updatedCampaigns);
 
-            alert(`✅ Successfully sent ${result.sent} messengers to ${result.total} contacts!`);
+            const sent = result.sent_count ?? result.sentCount ?? result.sent ?? 0;
+            const failed = result.failed_count ?? result.failedCount ?? result.failed ?? 0;
+            const total = result.recipient_count ?? result.recipientCount ?? result.total ?? data.contactIds.length;
+            const status = result.status || (failed > 0 ? (sent > 0 ? 'partial' : 'failed') : 'completed');
+
+            if (failed > 0) {
+                const errors = result.errors && Array.isArray(result.errors) ? result.errors : [];
+                const firstError = errors.length ? ` First error: ${errors[0].error || ''}` : '';
+                alert(`⚠️ Campaign status: ${status}. Sent ${sent}/${total}. Failed ${failed}.${firstError}`);
+            } else {
+                alert(`✅ Campaign ${status}. Sent ${sent}/${total} messages.`);
+            }
         } catch (error) {
             console.error('Error sending messages:', error);
             alert('Failed to send messages. Please try again.');
@@ -566,8 +918,8 @@ function MarketingDashboard() {
             'Name': c.name,
             'Email': c.email,
             'Phone': c.phone,
-            'Added On': new Date(c.createdAt).toLocaleDateString(),
-            'Last Contacted': c.lastContactedAt ? new Date(c.lastContactedAt).toLocaleDateString() : 'Never'
+            'Added On': formatDate(c.createdAt),
+            'Last Contacted': c.lastContactedAt ? formatDate(c.lastContactedAt) : 'Never'
         }));
 
         const worksheet = XLSX.utils.json_to_sheet(excelData);
@@ -602,12 +954,12 @@ function MarketingDashboard() {
     const navItems = [
         { id: 'dashboard', label: 'Dashboard', icon: Home },
         { id: 'contacts', label: 'Contacts', icon: Users },
+        { id: 'certificates', label: 'Certificates', icon: Award },
         { id: 'email', label: 'Email Campaigns', icon: Mail },
         { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
         { id: 'templates', label: 'Templates', icon: BookOpen },
         { id: 'scheduled', label: 'Scheduled', icon: Calendar },
         { id: 'campaigns', label: 'All Campaigns', icon: Layers },
-        { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     ];
 
 
@@ -624,12 +976,12 @@ function MarketingDashboard() {
         switch (activeTab) {
             case 'dashboard': return 'Dashboard';
             case 'contacts': return 'Contacts';
+            case 'certificates': return 'Certificates';
             case 'email': return 'Email Campaigns';
             case 'whatsapp': return 'WhatsApp';
             case 'templates': return 'Message Templates';
             case 'scheduled': return 'Scheduled Campaigns';
             case 'campaigns': return 'All Campaigns';
-            case 'analytics': return 'Analytics';
             default: return 'Dashboard';
         }
     };
@@ -638,6 +990,8 @@ function MarketingDashboard() {
         switch (activeTab) {
             case 'contacts':
                 return renderContactsView();
+            case 'certificates':
+                return renderCertificatesView();
             case 'email':
                 return renderEmailView();
             case 'whatsapp':
@@ -648,8 +1002,6 @@ function MarketingDashboard() {
                 return renderScheduledView();
             case 'campaigns':
                 return renderCampaignsView();
-            case 'analytics':
-                return renderAnalyticsView();
             default:
                 return renderDashboardView();
         }
@@ -661,7 +1013,7 @@ function MarketingDashboard() {
             <div className="welcome-banner">
                 <div className="banner-content">
                     <div className="banner-text">
-                        <h2>Welcome back! 📧</h2>
+                        <h2>Welcome back!</h2>
                         <p>Send bulk emails and WhatsApp messages to your contacts. Upload your database and start your campaign!</p>
                     </div>
                     <div className="banner-actions">
@@ -757,46 +1109,249 @@ function MarketingDashboard() {
                 </div>
             </div>
 
-            {/* Quick Actions */}
-            <div className="quick-actions-grid">
-                <div className="quick-action-card" onClick={() => setShowUploadModal(true)}>
-                    <div className="quick-action-icon upload">
-                        <Upload size={28} />
+            {/* Marketing Analytics & Graphs */}
+            <div className="analytics-section">
+                <div className="analytics-grid">
+                    {/* Campaign Performance Chart */}
+                    <div className="card analytics-card">
+                        <div className="card-header">
+                            <div className="card-header-left">
+                                <h2 className="card-title">
+                                    <TrendingUp size={24} />
+                                    Campaign Performance
+                                </h2>
+                                <p className="card-description">Email vs WhatsApp delivery rates</p>
                     </div>
-                    <h3>Upload Contacts</h3>
-                    <p>Import your contact database from Excel</p>
                 </div>
-                <div className="quick-action-card" onClick={() => openComposeModal('email')}>
-                    <div className="quick-action-icon email">
-                        <Mail size={28} />
+                        <div className="card-body">
+                            <div className="chart-container">
+                                <div className="chart-bars">
+                                    <div className="chart-bar-group">
+                                        <div className="chart-bar-label">Email</div>
+                                        <div className="chart-bar-wrapper">
+                                            <div 
+                                                className="chart-bar email-bar" 
+                                                style={{ 
+                                                    height: `${stats.totalContacts > 0 ? (stats.emailsSent / stats.totalContacts) * 100 : 0}%`,
+                                                    maxHeight: '200px'
+                                                }}
+                                            >
+                                                <span className="chart-bar-value">{stats.emailsSent}</span>
                     </div>
-                    <h3>Send Bulk Email</h3>
-                    <p>Create and send email campaigns</p>
                 </div>
-                <div className="quick-action-card" onClick={() => openComposeModal('whatsapp')}>
-                    <div className="quick-action-icon whatsapp">
-                        <MessageCircle size={28} />
                     </div>
-                    <h3>Send WhatsApp</h3>
-                    <p>Send bulk WhatsApp messages</p>
+                                    <div className="chart-bar-group">
+                                        <div className="chart-bar-label">WhatsApp</div>
+                                        <div className="chart-bar-wrapper">
+                                            <div 
+                                                className="chart-bar whatsapp-bar" 
+                                                style={{ 
+                                                    height: `${stats.totalContacts > 0 ? (stats.whatsappSent / stats.totalContacts) * 100 : 0}%`,
+                                                    maxHeight: '200px'
+                                                }}
+                                            >
+                                                <span className="chart-bar-value">{stats.whatsappSent}</span>
                 </div>
-                <div className="quick-action-card" onClick={handleExportContacts}>
-                    <div className="quick-action-icon export">
-                        <Download size={28} />
                     </div>
-                    <h3>Export Data</h3>
-                    <p>Download your contacts to Excel</p>
                 </div>
-                <div className="quick-action-card" onClick={() => {
-                    const sampleCert = contacts.length > 0 ? contacts[0] : { name: 'Your Name', certificateNumber: 'TSP123456', reraAwardeNo: 'RERA-789', professional: 'RERA CONSULTANT' };
-                    setPreviewCertificate(sampleCert);
-                    setShowPreviewModal(true);
-                }}>
-                    <div className="quick-action-icon preview">
-                        <Eye size={28} />
                     </div>
-                    <h3>Preview Certificate</h3>
-                    <p>View the current certificate design</p>
+                                <div className="chart-legend">
+                                    <div className="legend-item">
+                                        <span className="legend-color email"></span>
+                                        <span>Email Campaigns</span>
+                                    </div>
+                                    <div className="legend-item">
+                                        <span className="legend-color whatsapp"></span>
+                                        <span>WhatsApp Campaigns</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Campaign Success Rate */}
+                    <div className="card analytics-card">
+                        <div className="card-header">
+                            <div className="card-header-left">
+                                <h2 className="card-title">
+                                    <BarChart3 size={24} />
+                                    Campaign Success Rate
+                                </h2>
+                                <p className="card-description">Overall delivery statistics</p>
+                            </div>
+                        </div>
+                        <div className="card-body">
+                            <div className="success-metrics">
+                                {campaigns.length > 0 ? (
+                                    <>
+                                        {(() => {
+                                            const completed = campaigns.filter(c => c.status === 'completed' || c.status === 'sent').length;
+                                            const failed = campaigns.filter(c => c.status === 'failed').length;
+                                            const partial = campaigns.filter(c => c.status === 'partial').length;
+                                            const total = campaigns.length;
+                                            const successRate = total > 0 ? Math.round((completed / total) * 100) : 0;
+                                            
+                                            return (
+                                                <>
+                                                    <div className="metric-item">
+                                                        <div className="metric-header">
+                                                            <span className="metric-label">Success Rate</span>
+                                                            <span className="metric-value-large">{successRate}%</span>
+                                                        </div>
+                                                        <div className="metric-progress">
+                                                            <div 
+                                                                className="metric-progress-bar success" 
+                                                                style={{ width: `${successRate}%` }}
+                                                            ></div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="metric-breakdown">
+                                                        <div className="breakdown-item success">
+                                                            <CheckCircle size={16} />
+                                                            <span>Completed: {completed}</span>
+                                                        </div>
+                                                        <div className="breakdown-item warning">
+                                                            <AlertCircle size={16} />
+                                                            <span>Partial: {partial}</span>
+                                                        </div>
+                                                        <div className="breakdown-item error">
+                                                            <AlertCircle size={16} />
+                                                            <span>Failed: {failed}</span>
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
+                                    </>
+                                ) : (
+                                    <div className="empty-chart">
+                                        <BarChart3 size={48} />
+                                        <p>No campaign data yet</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Message Distribution */}
+                    <div className="card analytics-card">
+                        <div className="card-header">
+                            <div className="card-header-left">
+                                <h2 className="card-title">
+                                    <PieChart size={24} />
+                                    Message Distribution
+                                </h2>
+                                <p className="card-description">Email vs WhatsApp breakdown</p>
+                            </div>
+                        </div>
+                        <div className="card-body">
+                            <div className="distribution-chart">
+                                {stats.emailsSent + stats.whatsappSent > 0 ? (
+                                    <>
+                                        <div className="distribution-item">
+                                            <div className="distribution-header">
+                                                <Mail size={18} />
+                                                <span>Email</span>
+                                                <span className="distribution-percentage">
+                                                    {Math.round((stats.emailsSent / (stats.emailsSent + stats.whatsappSent)) * 100)}%
+                                                </span>
+                                            </div>
+                                            <div className="distribution-bar">
+                                                <div 
+                                                    className="distribution-bar-fill email" 
+                                                    style={{ 
+                                                        width: `${(stats.emailsSent / (stats.emailsSent + stats.whatsappSent)) * 100}%` 
+                                                    }}
+                                                ></div>
+                                            </div>
+                                            <div className="distribution-value">{stats.emailsSent} messages</div>
+                                        </div>
+                                        <div className="distribution-item">
+                                            <div className="distribution-header">
+                                                <MessageCircle size={18} />
+                                                <span>WhatsApp</span>
+                                                <span className="distribution-percentage">
+                                                    {Math.round((stats.whatsappSent / (stats.emailsSent + stats.whatsappSent)) * 100)}%
+                                                </span>
+                                            </div>
+                                            <div className="distribution-bar">
+                                                <div 
+                                                    className="distribution-bar-fill whatsapp" 
+                                                    style={{ 
+                                                        width: `${(stats.whatsappSent / (stats.emailsSent + stats.whatsappSent)) * 100}%` 
+                                                    }}
+                                                ></div>
+                                            </div>
+                                            <div className="distribution-value">{stats.whatsappSent} messages</div>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="empty-chart">
+                                        <Send size={48} />
+                                        <p>No messages sent yet</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Campaign Timeline */}
+                    <div className="card analytics-card">
+                        <div className="card-header">
+                            <div className="card-header-left">
+                                <h2 className="card-title">
+                                    <Calendar size={24} />
+                                    Recent Activity
+                                </h2>
+                                <p className="card-description">Last 7 days campaign activity</p>
+                            </div>
+                        </div>
+                        <div className="card-body">
+                            <div className="timeline-chart">
+                                {(() => {
+                                    const last7Days = Array.from({ length: 7 }, (_, i) => {
+                                        const date = new Date();
+                                        date.setDate(date.getDate() - (6 - i));
+                                        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                    });
+                                    
+                                    const campaignCounts = last7Days.map(day => {
+                                        return campaigns.filter(c => {
+                                            const created = parseFirestoreDate(c.created_at || c.createdAt);
+                                            if (!created) return false;
+                                            const createdStr = created.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                            return createdStr === day;
+                                        }).length;
+                                    });
+                                    
+                                    const maxCount = Math.max(...campaignCounts, 1);
+                                    
+                                    return (
+                                        <div className="timeline-bars">
+                                            {last7Days.map((day, index) => (
+                                                <div key={day} className="timeline-bar-group">
+                                                    <div className="timeline-bar-wrapper">
+                                                        <div 
+                                                            className="timeline-bar" 
+                                                            style={{ 
+                                                                height: `${(campaignCounts[index] / maxCount) * 100}%`,
+                                                                maxHeight: '120px'
+                                                            }}
+                                                        >
+                                                            {campaignCounts[index] > 0 && (
+                                                                <span className="timeline-bar-value">{campaignCounts[index]}</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="timeline-label">{day}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    );
+                                })()}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -848,12 +1403,9 @@ function MarketingDashboard() {
                                             {campaign.subject || campaign.message.substring(0, 50) + '...'}
                                         </td>
                                         <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
+                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
                                         <td>
-                                            <span className="badge badge-success">
-                                                <CheckCircle size={12} />
-                                                Sent
-                                            </span>
+                                            {renderStatusBadge(campaign)}
                                         </td>
                                     </tr>
                                 ))}
@@ -975,6 +1527,527 @@ function MarketingDashboard() {
         </>
     );
 
+    const renderCertificatesView = () => {
+        // Create default certificate object
+        const defaultCertificate = {
+            id: 'default',
+            certificate_number: 'DEFAULT',
+            recipient_name: 'Default Certificate Template',
+            phone_number: '-',
+            email: '-',
+            whatsapp_sent: false,
+            created_at: null,
+            pdf_url: certificateTemplate?.url || '/Certificate.jpg',
+            is_default: true
+        };
+
+        // Combine default certificate with actual certificates
+        const allCertificates = [defaultCertificate, ...certificates];
+
+        const filteredCertificates = allCertificates.filter(cert =>
+            cert.recipient_name?.toLowerCase().includes(certificateSearchQuery.toLowerCase()) ||
+            cert.certificate_number?.toLowerCase().includes(certificateSearchQuery.toLowerCase()) ||
+            cert.phone_number?.includes(certificateSearchQuery) ||
+            cert.email?.toLowerCase().includes(certificateSearchQuery.toLowerCase())
+        );
+
+        const handlePreview = (certificate) => {
+            setPreviewCertificate(certificate);
+            setShowPreviewModal(true);
+        };
+
+        const handleDelete = async (id, certificateNumber) => {
+            // Prevent deletion of default certificate
+            if (id === 'default') {
+                alert('Cannot delete the default certificate template. This is a system template.');
+                return;
+            }
+
+            if (!window.confirm(`Are you sure you want to delete certificate ${certificateNumber}?`)) {
+                return;
+            }
+
+            try {
+                await certificateAPI.delete(id);
+                alert('Certificate deleted successfully!');
+                // Reload certificates
+                const updatedCertificates = await certificateAPI.getAll();
+                setCertificates(Array.isArray(updatedCertificates) ? updatedCertificates : []);
+            } catch (error) {
+                console.error('Error deleting certificate:', error);
+                alert('Failed to delete certificate');
+            }
+        };
+
+        const handleDownload = (certificate) => {
+            // For default certificate, open the template image
+            if (certificate.id === 'default') {
+                const url = certificateTemplate?.url || '/Certificate.jpg';
+                window.open(url, '_blank');
+                return;
+            }
+
+            if (certificate.pdf_url) {
+                window.open(certificate.pdf_url, '_blank');
+            } else {
+                alert('PDF URL not available for this certificate');
+            }
+        };
+
+        const handleTemplateUpload = async (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                console.log('No file selected');
+                return;
+            }
+
+            console.log('File selected:', file.name, file.type, file.size);
+
+            // Validate file type
+            if (!file.type.startsWith('image/')) {
+                alert('Please upload an image file (JPG, PNG, etc.)');
+                return;
+            }
+
+            // Validate file size (max 5MB)
+            if (file.size > 5 * 1024 * 1024) {
+                alert('File size must be less than 5MB');
+                return;
+            }
+
+            setTemplateUploading(true);
+            
+            try {
+                // Convert to base64 using Promise
+                const base64String = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                        if (reader.error) {
+                            reject(reader.error);
+                        } else {
+                            resolve(reader.result);
+                        }
+                    };
+                    reader.onerror = () => {
+                        reject(new Error('Failed to read file'));
+                    };
+                    reader.readAsDataURL(file);
+                });
+
+                console.log('File converted to base64, length:', base64String.length, 'bytes', `(${(base64String.length / 1024 / 1024).toFixed(2)}MB)`);
+
+                // Check if base64 string is too large
+                if (base64String.length > 10 * 1024 * 1024) {
+                    throw new Error(`Image is too large (${(base64String.length / 1024 / 1024).toFixed(2)}MB). Please use an image smaller than 5MB.`);
+                }
+
+                const apiUrl = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
+                console.log('Uploading to:', `${apiUrl}/certificates/template`);
+                
+                // Check if API URL is accessible
+                if (!apiUrl || apiUrl === 'undefined') {
+                    throw new Error('API URL is not configured. Please set VITE_API_URL environment variable.');
+                }
+
+                // Upload to backend with timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+                
+                let response;
+                try {
+                    response = await fetch(`${apiUrl}/certificates/template`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            image: base64String,
+                            filename: file.name,
+                            contentType: file.type
+                        }),
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                } catch (fetchError) {
+                    clearTimeout(timeoutId);
+                    if (fetchError.name === 'AbortError') {
+                        throw new Error('Upload timeout: The request took too long. Please try with a smaller image or check your connection.');
+                    } else if (fetchError.message && fetchError.message.includes('Failed to fetch')) {
+                        throw new Error('Network error: Could not connect to the server. Please check your internet connection and ensure the API is accessible.');
+                    }
+                    throw fetchError;
+                }
+
+                console.log('Response status:', response.status);
+                console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
+                let errorData;
+                let data;
+                
+                try {
+                    const responseText = await response.text();
+                    console.log('Response text:', responseText.substring(0, 200));
+                    
+                    if (!response.ok) {
+                        try {
+                            errorData = JSON.parse(responseText);
+                        } catch (parseError) {
+                            errorData = { 
+                                error: `Server error (${response.status})`,
+                                details: responseText.substring(0, 200) || response.statusText
+                            };
+                        }
+                        console.error('Upload error response:', errorData);
+                        throw new Error(errorData.error || errorData.details || `Upload failed with status ${response.status}: ${response.statusText}`);
+                    }
+
+                    try {
+                        data = JSON.parse(responseText);
+                    } catch (parseError) {
+                        console.error('Failed to parse response as JSON:', parseError);
+                        throw new Error('Invalid response format from server');
+                    }
+                    
+                    console.log('Upload successful:', data);
+                    
+                    if (data.success && data.data) {
+                        setCertificateTemplate(data.data);
+                        alert('Certificate template uploaded successfully!');
+                        setShowTemplateUpload(false);
+                        // Reload template to show updated version
+                        try {
+                            const loadResponse = await fetch(`${apiUrl}/certificates/template`);
+                            if (loadResponse.ok) {
+                                const loadData = await loadResponse.json();
+                                if (loadData.success && loadData.data && loadData.data.url) {
+                                    setCertificateTemplate(loadData.data);
+                                }
+                            }
+                        } catch (loadError) {
+                            console.warn('Could not reload template:', loadError);
+                        }
+                    } else {
+                        throw new Error(data.error || data.message || 'Invalid response from server');
+                    }
+                } catch (fetchError) {
+                    // If it's already an Error with message, rethrow it
+                    if (fetchError instanceof Error && fetchError.message) {
+                        throw fetchError;
+                    }
+                    // Otherwise create a new error
+                    throw new Error(fetchError.message || 'Failed to process server response');
+                }
+            } catch (error) {
+                console.error('Error uploading template:', error);
+                console.error('Error stack:', error.stack);
+                
+                // More detailed error messages
+                let errorMessage = 'Failed to upload template';
+                
+                if (error.message) {
+                    errorMessage = error.message;
+                } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                    errorMessage = 'Network error: Could not connect to server. Please check your internet connection and API URL.';
+                } else if (error.name === 'SyntaxError') {
+                    errorMessage = 'Server response error: Invalid data format received.';
+                } else {
+                    errorMessage = `Upload failed: ${error.message || error.toString()}`;
+                }
+                
+                alert(errorMessage);
+            } finally {
+                setTemplateUploading(false);
+                // Reset file input
+                e.target.value = '';
+            }
+        };
+
+
+        return (
+            <>
+                <div className="page-actions">
+                    <div className="page-actions-left">
+                        <h2>Certificates ({certificates.length})</h2>
+                    </div>
+                    <div className="page-actions-right">
+                        <button 
+                            className="btn btn-outline" 
+                            onClick={() => setShowTemplateUpload(!showTemplateUpload)}
+                            title="Upload Certificate Template"
+                        >
+                            <Image size={18} />
+                            {certificateTemplate ? 'Update Template' : 'Upload Template'}
+                        </button>
+                        <div className="search-box">
+                            <Search size={18} />
+                            <input
+                                type="text"
+                                placeholder="Search certificates..."
+                                value={certificateSearchQuery}
+                                onChange={(e) => setCertificateSearchQuery(e.target.value)}
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                {/* Certificate Template Upload Section */}
+                {showTemplateUpload && (
+                    <div className="card template-upload-card">
+                        <div className="card-header">
+                            <div className="card-header-left">
+                                <h2 className="card-title">
+                                    <Image size={24} />
+                                    Certificate Template
+                                </h2>
+                                <p className="card-description">
+                                    Upload a blank certificate image. Names and information will be automatically added when creating certificates.
+                                </p>
+                            </div>
+                        </div>
+                        <div className="card-body">
+                            {certificateTemplate ? (
+                                <div className="template-preview-section">
+                                    <p className="template-preview-label">Current Template:</p>
+                                    <div className="template-preview-image-wrapper">
+                                        <img 
+                                            src={certificateTemplate.url} 
+                                            alt="Certificate Template" 
+                                            className="template-preview-image"
+                                        />
+                                    </div>
+                                    <button
+                                        className="btn btn-outline btn-sm"
+                                        onClick={async () => {
+                                            if (window.confirm('Are you sure you want to remove the custom template and use the default?')) {
+                                                try {
+                                                    const apiUrl = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
+                                                    const response = await fetch(`${apiUrl}/certificates/template`, {
+                                                        method: 'DELETE'
+                                                    });
+                                                    if (response.ok) {
+                                                        setCertificateTemplate(null);
+                                                        alert('Custom template removed. Default certificate will be used.');
+                                                    }
+                                                } catch (error) {
+                                                    console.error('Error removing template:', error);
+                                                    alert('Failed to remove template');
+                                                }
+                                            }
+                                        }}
+                                        style={{ marginTop: 'var(--spacing-sm)' }}
+                                    >
+                                        <X size={16} />
+                                        Remove Custom Template
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="template-preview-section">
+                                    <p className="template-preview-label">Default Template:</p>
+                                    <div className="template-preview-image-wrapper">
+                                        <img 
+                                            src="/Certificate.jpg" 
+                                            alt="Default Certificate Template" 
+                                            className="template-preview-image"
+                                            onError={(e) => {
+                                                e.target.style.display = 'none';
+                                                e.target.nextSibling.style.display = 'block';
+                                            }}
+                                        />
+                                        <div style={{ display: 'none', padding: 'var(--spacing-lg)', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                            <p>Default certificate image not found</p>
+                                            <p style={{ fontSize: '0.875rem' }}>Upload a template to get started</p>
+                                        </div>
+                                    </div>
+                                    <p style={{ marginTop: 'var(--spacing-sm)', fontSize: '0.875rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                        This is the default certificate template. Upload a custom template to replace it.
+                                    </p>
+                                </div>
+                            )}
+                            <div className="form-group template-upload-group">
+                                <label className="form-label template-upload-label">
+                                    <Upload size={18} />
+                                    Upload Blank Certificate Image
+                                </label>
+                                <div className="file-upload-wrapper">
+                                    <input
+                                        type="file"
+                                        id="template-upload-input"
+                                        accept="image/jpeg,image/jpg,image/png,image/gif"
+                                        onChange={handleTemplateUpload}
+                                        disabled={templateUploading}
+                                        className="file-upload-input"
+                                    />
+                                    <label 
+                                        htmlFor="template-upload-input" 
+                                        className="file-upload-label"
+                                        style={{ 
+                                            opacity: templateUploading ? 0.6 : 1,
+                                            cursor: templateUploading ? 'not-allowed' : 'pointer'
+                                        }}
+                                    >
+                                        {templateUploading ? (
+                                            <>
+                                                <div className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px', borderColor: 'var(--primary)', borderTopColor: 'transparent' }}></div>
+                                                <span>Uploading...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Upload size={20} />
+                                                <span>Choose Image File</span>
+                                            </>
+                                        )}
+                                    </label>
+                                </div>
+                                <small className="template-upload-hint">
+                                    Supported formats: JPG, PNG. Max size: 5MB. The image will be used as the background for all certificates.
+                                </small>
+                            </div>
+                            {templateUploading && (
+                                <div className="template-upload-progress">
+                                    <div className="spinner"></div>
+                                    <p>Uploading template...</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <div className="card table-card">
+                    <div className="card-header">
+                        <div className="card-header-left">
+                            <h2 className="card-title">
+                                <Award size={24} />
+                                All Certificates
+                            </h2>
+                            <p className="card-description">
+                                {certificateSearchQuery
+                                    ? `Showing ${filteredCertificates.length} of ${certificates.length} certificates`
+                                    : `Manage all ${certificates.length} generated certificates`
+                                }
+                            </p>
+                        </div>
+                    </div>
+
+                    {loading ? (
+                        <div className="loading-container">
+                            <div className="spinner"></div>
+                            <p>Loading certificates...</p>
+                        </div>
+                    ) : filteredCertificates.length === 0 ? (
+                        <div className="empty-state">
+                            <div className="empty-icon">
+                                <Award size={64} />
+                            </div>
+                            <h3>{certificateSearchQuery ? 'No certificates found' : 'No certificates yet'}</h3>
+                            <p>
+                                {certificateSearchQuery
+                                    ? `No certificates match "${certificateSearchQuery}". Try a different search term.`
+                                    : 'Certificates will appear here once they are created.'
+                                }
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="table-container">
+                            <table className="table">
+                                <thead>
+                                    <tr>
+                                        <th>Recipient</th>
+                                        <th>Certificate #</th>
+                                        <th>Phone</th>
+                                        <th>Email</th>
+                                        <th>Status</th>
+                                        <th>Created</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredCertificates.map((cert) => (
+                                        <tr key={cert.id}>
+                                            <td>
+                                                <div className="recipient-cell">
+                                                    <div className="recipient-avatar">
+                                                        {cert.recipient_name?.charAt(0).toUpperCase() || 'U'}
+                                                    </div>
+                                                    <div className="recipient-info">
+                                                        <strong>{cert.recipient_name}</strong>
+                                                        {cert.award_rera_number && (
+                                                            <span className="recipient-subtext">RERA: {cert.award_rera_number}</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <code className="certificate-code">
+                                                    {cert.certificate_number}
+                                                </code>
+                                            </td>
+                                            <td>
+                                                <span className="phone-number">{cert.phone_number || '-'}</span>
+                                            </td>
+                                            <td>
+                                                <span>{cert.email || '-'}</span>
+                                            </td>
+                                            <td>
+                                                {cert.id === 'default' ? (
+                                                    <span className="badge badge-info">
+                                                        <FileText size={12} />
+                                                        Template
+                                                    </span>
+                                                ) : cert.whatsapp_sent ? (
+                                                    <span className="badge badge-success">
+                                                        <CheckCircle size={12} />
+                                                        Sent
+                                                    </span>
+                                                ) : (
+                                                    <span className="badge badge-warning">
+                                                        <Clock size={12} />
+                                                        Pending
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td>
+                                                <span className="date-cell">
+                                                    {cert.id === 'default' ? 'System Template' : formatDate(cert.created_at)}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div className="action-buttons">
+                                                    <button
+                                                        className="action-btn action-btn-view"
+                                                        onClick={() => handlePreview(cert)}
+                                                        title="Preview Certificate"
+                                                    >
+                                                        <Eye size={16} />
+                                                    </button>
+                                                    <button
+                                                        className="action-btn action-btn-download"
+                                                        onClick={() => handleDownload(cert)}
+                                                        title={cert.id === 'default' ? 'View Template' : 'Download PDF'}
+                                                    >
+                                                        <Download size={16} />
+                                                    </button>
+                                                    {cert.id !== 'default' && (
+                                                        <button
+                                                            className="action-btn action-btn-delete"
+                                                            onClick={() => handleDelete(cert.id, cert.certificate_number)}
+                                                            title="Delete"
+                                                        >
+                                                            <Trash2 size={16} />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </>
+        );
+    };
+
     const renderEmailView = () => (
         <>
             <div className="page-actions">
@@ -1027,12 +2100,9 @@ function MarketingDashboard() {
                                     <tr key={campaign.id}>
                                         <td>{campaign.subject}</td>
                                         <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
+                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
                                         <td>
-                                            <span className="badge badge-success">
-                                                <CheckCircle size={12} />
-                                                Sent
-                                            </span>
+                                            {renderStatusBadge(campaign)}
                                         </td>
                                     </tr>
                                 ))}
@@ -1096,12 +2166,9 @@ function MarketingDashboard() {
                                     <tr key={campaign.id}>
                                         <td className="message-preview">{campaign.message.substring(0, 50)}...</td>
                                         <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
+                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
                                         <td>
-                                            <span className="badge badge-success">
-                                                <CheckCircle size={12} />
-                                                Sent
-                                            </span>
+                                            {renderStatusBadge(campaign)}
                                         </td>
                                     </tr>
                                 ))}
@@ -1208,7 +2275,7 @@ function MarketingDashboard() {
                             {template.subject && <p className="template-subject">Subject: {template.subject}</p>}
                             <p className="template-preview">{template.content.substring(0, 100)}...</p>
                             <div className="template-footer">
-                                <span className="template-date">Created {new Date(template.createdAt).toLocaleDateString()}</span>
+                                <span className="template-date">Created {formatDate(template.createdAt)}</span>
                             </div>
                         </div>
                     ))}
@@ -1341,7 +2408,7 @@ function MarketingDashboard() {
                                             <td>
                                                 <span className="scheduled-time">
                                                     <Clock size={14} />
-                                                    {campaign.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString() : 'Not set'}
+                                                    {campaign.scheduledAt ? formatDateTime(campaign.scheduledAt) : 'Not set'}
                                                 </span>
                                             </td>
                                             <td>
@@ -1410,12 +2477,9 @@ function MarketingDashboard() {
                                             {campaign.subject || campaign.message.substring(0, 50) + '...'}
                                         </td>
                                         <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{new Date(campaign.created_at || campaign.createdAt || Date.now()).toLocaleDateString()}</td>
+                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
                                         <td>
-                                            <span className="badge badge-success">
-                                                <CheckCircle size={12} />
-                                                Sent
-                                            </span>
+                                            {renderStatusBadge(campaign)}
                                         </td>
                                     </tr>
                                 ))}
@@ -1427,71 +2491,6 @@ function MarketingDashboard() {
         </>
     );
 
-    const renderAnalyticsView = () => (
-        <>
-            <div className="page-actions">
-                <div className="page-actions-left">
-                    <h2>Analytics Overview</h2>
-                </div>
-            </div>
-
-            <div className="analytics-grid">
-                <div className="analytics-card">
-                    <div className="analytics-header">
-                        <h3>Messaging Performance</h3>
-                    </div>
-                    <div className="analytics-body">
-                        <div className="analytics-stat">
-                            <div className="analytics-stat-value">{stats.emailsSent + stats.whatsappSent}</div>
-                            <div className="analytics-stat-label">Total Messages Sent</div>
-                        </div>
-                        <div className="analytics-breakdown">
-                            <div className="breakdown-item">
-                                <Mail size={18} className="email-icon" />
-                                <span>{stats.emailsSent} Emails</span>
-                            </div>
-                            <div className="breakdown-item">
-                                <MessageCircle size={18} className="whatsapp-icon" />
-                                <span>{stats.whatsappSent} WhatsApp</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="analytics-card">
-                    <div className="analytics-header">
-                        <h3>Contact Growth</h3>
-                    </div>
-                    <div className="analytics-body">
-                        <div className="analytics-stat">
-                            <div className="analytics-stat-value">{stats.totalContacts}</div>
-                            <div className="analytics-stat-label">Total Contacts</div>
-                        </div>
-                        <div className="growth-indicator positive">
-                            <TrendingUp size={16} />
-                            <span>Growing database</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="analytics-card">
-                    <div className="analytics-header">
-                        <h3>Campaign Stats</h3>
-                    </div>
-                    <div className="analytics-body">
-                        <div className="analytics-stat">
-                            <div className="analytics-stat-value">{stats.campaigns}</div>
-                            <div className="analytics-stat-label">Total Campaigns</div>
-                        </div>
-                        <div className="campaign-types">
-                            <span>{campaigns.filter(c => c.type === 'email').length} Email</span>
-                            <span>{campaigns.filter(c => c.type === 'whatsapp').length} WhatsApp</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </>
-    );
 
     return (
         <div className="dashboard-layout">
@@ -1509,13 +2508,14 @@ function MarketingDashboard() {
             >
                 <div className="sidebar-header">
                     <div className="sidebar-logo">
-                        <div className="logo-icon-wrapper">
-                            <Send size={24} />
-                        </div>
+                        <img
+                            src="/logo.svg"
+                            alt="Top Selling Properties Logo"
+                            className="logo-image"
+                        />
                         {(!sidebarCollapsed || sidebarHovered) && (
                             <div className="sidebar-brand-container">
-                                <span className="sidebar-brand">MarketHub</span>
-                                <span className="sidebar-brand-sub">Email & Marketing</span>
+                                <span className="sidebar-brand">Top Selling Properties</span>
                             </div>
                         )}
                     </div>
@@ -1573,6 +2573,21 @@ function MarketingDashboard() {
             {mobileMenuOpen && (
                 <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)} />
             )}
+            
+            {/* Notification Overlay */}
+            {showNotifications && (
+                <div 
+                    style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        zIndex: 999
+                    }}
+                    onClick={() => setShowNotifications(false)}
+                />
+            )}
 
             {/* Main Content */}
             <div className={`main-content ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
@@ -1600,12 +2615,157 @@ function MarketingDashboard() {
                             />
                         </div>
 
-                        <button className="header-icon-btn notification-btn">
-                            <Bell size={20} />
-                            {campaigns.length > 0 && (
-                                <span className="notification-badge">{campaigns.length > 9 ? '9+' : campaigns.length}</span>
+                        <div className="notification-container" style={{ position: 'relative' }}>
+                            <button 
+                                className="header-icon-btn notification-btn"
+                                onClick={() => setShowNotifications(!showNotifications)}
+                            >
+                                <Bell size={20} />
+                                {unreadCount > 0 && (
+                                    <span className="notification-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
+                                )}
+                            </button>
+                            
+                            {showNotifications && (
+                                <div 
+                                    className="notification-dropdown"
+                                    style={{
+                                        position: 'absolute',
+                                        top: '100%',
+                                        right: 0,
+                                        marginTop: '8px',
+                                        backgroundColor: 'white',
+                                        borderRadius: '8px',
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                                        minWidth: '320px',
+                                        maxWidth: '400px',
+                                        maxHeight: '400px',
+                                        overflowY: 'auto',
+                                        zIndex: 1000,
+                                        border: '1px solid #e5e7eb'
+                                    }}
+                                >
+                                    <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                                            Notifications
+                                        </h3>
+                                        {unreadCount > 0 && (
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        await notificationsService.markAllAsRead();
+                                                        loadNotifications();
+                                                    } catch (error) {
+                                                        console.error('Error marking all as read:', error);
+                                                    }
+                                                }}
+                                                style={{
+                                                    fontSize: '12px',
+                                                    color: '#3b82f6',
+                                                    background: 'none',
+                                                    border: 'none',
+                                                    cursor: 'pointer',
+                                                    padding: '4px 8px'
+                                                }}
+                                            >
+                                                Mark all read
+                                            </button>
+                                        )}
+                                    </div>
+                                    <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                                        {notifications.length === 0 ? (
+                                            <div style={{ padding: '24px', textAlign: 'center', color: '#6b7280' }}>
+                                                <Bell size={32} style={{ marginBottom: '8px', opacity: 0.5 }} />
+                                                <p style={{ margin: 0 }}>No notifications</p>
+                                            </div>
+                                        ) : (
+                                            notifications.map((notification) => {
+                                                const getIcon = () => {
+                                                    switch (notification.type) {
+                                                        case 'success':
+                                                            return <CheckCircle size={18} style={{ color: '#10b981' }} />;
+                                                        case 'warning':
+                                                            return <AlertCircle size={18} style={{ color: '#f59e0b' }} />;
+                                                        case 'error':
+                                                            return <AlertCircle size={18} style={{ color: '#ef4444' }} />;
+                                                        default:
+                                                            return <Bell size={18} style={{ color: '#3b82f6' }} />;
+                                                    }
+                                                };
+
+                                                return (
+                                                    <div
+                                                        key={notification.id}
+                                                        style={{
+                                                            padding: '12px 16px',
+                                                            borderBottom: '1px solid #f3f4f6',
+                                                            cursor: 'pointer',
+                                                            transition: 'background-color 0.2s',
+                                                            backgroundColor: notification.read ? 'white' : '#f0f9ff'
+                                                        }}
+                                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = notification.read ? 'white' : '#f0f9ff'}
+                                                        onClick={async () => {
+                                                            if (!notification.read) {
+                                                                try {
+                                                                    await notificationsService.markAsRead(notification.id);
+                                                                    loadNotifications();
+                                                                } catch (error) {
+                                                                    console.error('Error marking notification as read:', error);
+                                                                }
+                                                            }
+                                                            if (notification.link) {
+                                                                // Handle link navigation if needed
+                                                            }
+                                                            setShowNotifications(false);
+                                                        }}
+                                                    >
+                                                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                                                            {getIcon()}
+                                                            <div style={{ flex: 1 }}>
+                                                                <p style={{ 
+                                                                    margin: 0, 
+                                                                    fontSize: '14px', 
+                                                                    fontWeight: notification.read ? '400' : '600',
+                                                                    color: '#1f2937'
+                                                                }}>
+                                                                    {notification.title}
+                                                                </p>
+                                                                <p style={{ 
+                                                                    margin: '4px 0 0 0', 
+                                                                    fontSize: '12px', 
+                                                                    color: '#6b7280'
+                                                                }}>
+                                                                    {notification.message}
+                                                                </p>
+                                                                {notification.created_at && (
+                                                                    <p style={{ 
+                                                                        margin: '4px 0 0 0', 
+                                                                        fontSize: '11px', 
+                                                                        color: '#9ca3af'
+                                                                    }}>
+                                                                        {formatDateTime(notification.created_at)}
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                            {!notification.read && (
+                                                                <div style={{
+                                                                    width: '8px',
+                                                                    height: '8px',
+                                                                    borderRadius: '50%',
+                                                                    backgroundColor: '#3b82f6',
+                                                                    marginTop: '6px'
+                                                                }} />
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })
+                                        )}
+                                    </div>
+                                </div>
                             )}
-                        </button>
+                        </div>
 
                         <button
                             className="btn btn-primary create-btn"
@@ -1635,6 +2795,7 @@ function MarketingDashboard() {
                 <ComposeModal
                     type={composeType}
                     contacts={contacts}
+                    certificates={certificates}
                     onClose={() => setShowComposeModal(false)}
                     onSend={handleSendMessages}
                 />

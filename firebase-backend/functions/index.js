@@ -32,7 +32,8 @@ app.post('/init-db', async (req, res) => {
             'certificates',
             'marketing_contacts',
             'marketing_campaigns',
-            'marketing_templates'
+            'marketing_templates',
+            'notifications'
         ];
 
         const batch = db.batch();
@@ -88,8 +89,8 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // ============================================
 // CERTIFICATE CRUD OPERATIONS (Existing)
@@ -148,8 +149,28 @@ app.post('/certificates', async (req, res) => {
             updated_at: FieldValue.serverTimestamp()
         };
 
-        // Generate PDF
-        const pdfBuffer = await generateCertificatePDF(certificateData);
+        // Get certificate template URL from Firestore
+        let templateUrl = null;
+        try {
+            const templateDoc = await db.collection('certificate_settings').doc('template').get();
+            if (templateDoc.exists && templateDoc.data().url) {
+                templateUrl = templateDoc.data().url;
+            }
+        } catch (error) {
+            console.warn('Could not fetch certificate template, using default:', error.message);
+        }
+
+        // If no template uploaded, use default from public folder
+        // The default certificate is available at the public URL
+        if (!templateUrl) {
+            // Try to get default certificate URL from environment or use a public URL
+            // For deployed apps, this would be the app's public URL + /Certificate.jpg
+            // For now, we'll let the PDF generator use the local file as fallback
+            console.log('No custom template found, using default certificate');
+        }
+
+        // Generate PDF with template URL (null will use default from assets folder)
+        const pdfBuffer = await generateCertificatePDF(certificateData, templateUrl);
 
         // Upload to Firebase Storage
         const bucket = storage.bucket();
@@ -376,18 +397,23 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
             certificate
         );
 
-        // Update WhatsApp status
-        await db.collection('certificates').doc(id).update({
-            whatsapp_sent: true,
-            whatsapp_sent_at: FieldValue.serverTimestamp(),
-            updated_at: FieldValue.serverTimestamp()
-        });
+        // Verify the message was actually sent
+        if (result && result.success !== false) {
+            // Update WhatsApp status
+            await db.collection('certificates').doc(id).update({
+                whatsapp_sent: true,
+                whatsapp_sent_at: FieldValue.serverTimestamp(),
+                updated_at: FieldValue.serverTimestamp()
+            });
 
-        res.json({
-            success: true,
-            message: 'Certificate sent via WhatsApp successfully',
-            data: result
-        });
+            res.json({
+                success: true,
+                message: 'Certificate sent via WhatsApp successfully',
+                data: result
+            });
+        } else {
+            throw new Error(result?.error || 'WhatsApp message send failed');
+        }
     } catch (error) {
         console.error('Error sending certificate via WhatsApp:', error);
         res.status(500).json({
@@ -629,17 +655,22 @@ app.post('/certificates/bulk-send', async (req, res) => {
                             .replace(/\{\{certificate_url\}\}/gi, certificate.pdf_url || '');
                     }
 
-                    await sendBulkWhatsApp(recipientPhone, message);
+                    const whatsappResult = await sendBulkWhatsApp(recipientPhone, message);
 
-                    // Update certificate status
-                    const certRef = db.collection('certificates').doc(certId);
-                    batch.update(certRef, {
-                        whatsapp_sent: true,
-                        whatsapp_sent_at: FieldValue.serverTimestamp(),
-                        updated_at: FieldValue.serverTimestamp()
-                    });
+                    // Verify the message was actually sent
+                    if (whatsappResult && whatsappResult.success !== false) {
+                        // Update certificate status
+                        const certRef = db.collection('certificates').doc(certId);
+                        batch.update(certRef, {
+                            whatsapp_sent: true,
+                            whatsapp_sent_at: FieldValue.serverTimestamp(),
+                            updated_at: FieldValue.serverTimestamp()
+                        });
 
-                    results.whatsapp.sent++;
+                        results.whatsapp.sent++;
+                    } else {
+                        throw new Error(whatsappResult?.error || 'WhatsApp message send failed');
+                    }
                 } catch (error) {
                     console.error(`Failed to send WhatsApp for certificate ${certId}:`, error);
                     results.whatsapp.failed++;
@@ -1054,7 +1085,7 @@ app.get('/marketing/campaigns/:id', async (req, res) => {
  */
 app.post('/marketing/campaigns', async (req, res) => {
     try {
-        const { type, subject, message, contactIds, templateId, scheduledAt } = req.body;
+        const { type, subject, message, contactIds, templateId, scheduledAt, includeCertificate } = req.body;
 
         if (!type || !['email', 'whatsapp'].includes(type)) {
             return res.status(400).json({ error: 'Valid type (email or whatsapp) is required' });
@@ -1080,6 +1111,32 @@ app.post('/marketing/campaigns', async (req, res) => {
         const id = uuidv4();
         const isScheduled = scheduledAt && new Date(scheduledAt) > new Date();
 
+        // Handle certificate attachment
+        let certificateAttachment = null;
+        if (includeCertificate && includeCertificate.certificateId) {
+            if (includeCertificate.certificateId === 'default') {
+                // Use default certificate template
+                certificateAttachment = {
+                    certificateId: 'default',
+                    isDefault: true,
+                    formats: includeCertificate.formats || { pdf: true, jpg: false }
+                };
+            } else {
+                // Use specific certificate
+                const certDoc = await db.collection('certificates').doc(includeCertificate.certificateId).get();
+                if (certDoc.exists) {
+                    const certData = certDoc.data();
+                    certificateAttachment = {
+                        certificateId: includeCertificate.certificateId,
+                        certificateNumber: certData.certificate_number,
+                        pdfUrl: certData.pdf_url,
+                        isDefault: false,
+                        formats: includeCertificate.formats || { pdf: true, jpg: false }
+                    };
+                }
+            }
+        }
+
         const campaignData = {
             id,
             type,
@@ -1093,6 +1150,7 @@ app.post('/marketing/campaigns', async (req, res) => {
             status: isScheduled ? 'scheduled' : 'pending',
             scheduled_at: scheduledAt ? new Date(scheduledAt) : null,
             sent_at: null,
+            certificate_attachment: certificateAttachment,
             created_at: FieldValue.serverTimestamp(),
             updated_at: FieldValue.serverTimestamp()
         };
@@ -1102,7 +1160,7 @@ app.post('/marketing/campaigns', async (req, res) => {
         // If not scheduled, send immediately
         if (!isScheduled) {
             try {
-                await sendCampaignMessages(id, type, subject, message, contacts);
+                await sendCampaignMessages(id, type, subject, message, contacts, certificateAttachment);
             } catch (sendError) {
                 console.error('Error sending campaign:', sendError);
             }
@@ -1124,11 +1182,20 @@ app.post('/marketing/campaigns', async (req, res) => {
 /**
  * Helper function to send campaign messages
  */
-async function sendCampaignMessages(campaignId, type, subject, message, contacts) {
+async function sendCampaignMessages(campaignId, type, subject, message, contacts, certificateAttachment = null) {
     let sentCount = 0;
     let failedCount = 0;
+    const errors = [];
 
     const batch = db.batch();
+
+    // Check if service is configured before starting
+    if (type === 'email' && !isEmailConfigured()) {
+        throw new Error('Email service is not configured');
+    }
+    if (type === 'whatsapp' && !isWhatsAppConfigured()) {
+        throw new Error('WhatsApp service is not configured');
+    }
 
     for (const contact of contacts) {
         try {
@@ -1136,7 +1203,7 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
             const personalizedMessage = message.replace(/\{\{name\}\}/gi, contact.name || 'there');
 
             if (type === 'email' && contact.email) {
-                if (isEmailConfigured()) {
+                try {
                     await sendBulkEmail(contact.email, subject, personalizedMessage);
                     sentCount++;
 
@@ -1147,39 +1214,76 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                         last_contacted_at: FieldValue.serverTimestamp(),
                         last_contact_type: 'email'
                     });
+                } catch (error) {
+                    console.error(`Failed to send email to ${contact.email}:`, error);
+                    failedCount++;
+                    errors.push({ contactId: contact.id, contact: contact.email, error: error.message });
                 }
             } else if (type === 'whatsapp' && contact.phone) {
-                if (isWhatsAppConfigured()) {
-                    await sendBulkWhatsApp(contact.phone, personalizedMessage);
-                    sentCount++;
+                try {
+                    const result = await sendBulkWhatsApp(contact.phone, personalizedMessage);
+                    
+                    // Verify the message was actually sent
+                    if (result && result.success !== false) {
+                        sentCount++;
 
-                    // Update contact stats
-                    const contactRef = db.collection('marketing_contacts').doc(contact.id);
-                    batch.update(contactRef, {
-                        whatsapp_sent_count: FieldValue.increment(1),
-                        last_contacted_at: FieldValue.serverTimestamp(),
-                        last_contact_type: 'whatsapp'
-                    });
+                        // Update contact stats
+                        const contactRef = db.collection('marketing_contacts').doc(contact.id);
+                        batch.update(contactRef, {
+                            whatsapp_sent_count: FieldValue.increment(1),
+                            last_contacted_at: FieldValue.serverTimestamp(),
+                            last_contact_type: 'whatsapp'
+                        });
+                    } else {
+                        throw new Error(result?.error || 'Message send failed');
+                    }
+                } catch (error) {
+                    console.error(`Failed to send WhatsApp to ${contact.phone}:`, error);
+                    failedCount++;
+                    errors.push({ contactId: contact.id, contact: contact.phone, error: error.message });
                 }
+            } else {
+                // No valid contact method
+                failedCount++;
+                errors.push({ 
+                    contactId: contact.id, 
+                    contact: contact.name || contact.id, 
+                    error: type === 'email' ? 'No email address' : 'No phone number' 
+                });
             }
         } catch (error) {
             console.error(`Failed to send to ${contact.id}:`, error);
             failedCount++;
+            errors.push({ contactId: contact.id, error: error.message });
         }
+    }
+
+    // Commit contact updates
+    try {
+        await batch.commit();
+    } catch (error) {
+        console.error('Error committing contact updates:', error);
+    }
+
+    // Determine campaign status based on results
+    let campaignStatus = 'completed';
+    if (sentCount === 0 && failedCount > 0) {
+        campaignStatus = 'failed';
+    } else if (failedCount > 0 && sentCount > 0) {
+        campaignStatus = 'partial';
     }
 
     // Update campaign status
     await db.collection('marketing_campaigns').doc(campaignId).update({
-        status: 'completed',
+        status: campaignStatus,
         sent_count: sentCount,
         failed_count: failedCount,
-        sent_at: FieldValue.serverTimestamp(),
-        updated_at: FieldValue.serverTimestamp()
+        sent_at: sentCount > 0 ? FieldValue.serverTimestamp() : null,
+        updated_at: FieldValue.serverTimestamp(),
+        errors: errors.length > 0 ? errors : FieldValue.delete()
     });
 
-    await batch.commit();
-
-    return { sentCount, failedCount };
+    return { sentCount, failedCount, errors };
 }
 
 /**
@@ -1209,12 +1313,15 @@ app.post('/marketing/campaigns/:id/send', async (req, res) => {
             .filter(d => d.exists)
             .map(d => ({ id: d.id, ...d.data() }));
 
+        const certificateAttachment = campaign.certificate_attachment || null;
+        
         const result = await sendCampaignMessages(
             id,
             campaign.type,
             campaign.subject,
             campaign.message,
-            contacts
+            contacts,
+            certificateAttachment
         );
 
         res.json({
@@ -1490,6 +1597,183 @@ app.put('/marketing/scheduled/:id/reschedule', async (req, res) => {
 });
 
 // ============================================
+// NOTIFICATIONS MODULE
+// ============================================
+
+/**
+ * Get all notifications
+ */
+app.get('/notifications', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 50;
+        const unreadOnly = req.query.unread === 'true';
+
+        let query = db.collection('notifications')
+            .orderBy('created_at', 'desc');
+
+        if (unreadOnly) {
+            query = query.where('read', '==', false);
+        }
+
+        const snapshot = await query.limit(limit).get();
+
+        const notifications = [];
+        snapshot.forEach(doc => {
+            notifications.push({ id: doc.id, ...doc.data() });
+        });
+
+        // Get unread count
+        const unreadSnapshot = await db.collection('notifications')
+            .where('read', '==', false)
+            .get();
+        const unreadCount = unreadSnapshot.size;
+
+        res.json({
+            success: true,
+            data: notifications,
+            unreadCount
+        });
+    } catch (error) {
+        console.error('Error fetching notifications:', error);
+        res.status(500).json({ error: 'Failed to fetch notifications', details: error.message });
+    }
+});
+
+/**
+ * Create a notification
+ */
+app.post('/notifications', async (req, res) => {
+    try {
+        const { title, message, type, link, userId } = req.body;
+
+        if (!title || !message) {
+            return res.status(400).json({ error: 'Title and message are required' });
+        }
+
+        const id = uuidv4();
+        const notificationData = {
+            id,
+            title,
+            message,
+            type: type || 'info', // info, success, warning, error
+            link: link || null,
+            userId: userId || null, // null for global notifications
+            read: false,
+            created_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
+        };
+
+        await db.collection('notifications').doc(id).set(notificationData);
+
+        res.status(201).json({
+            success: true,
+            message: 'Notification created successfully',
+            data: notificationData
+        });
+    } catch (error) {
+        console.error('Error creating notification:', error);
+        res.status(500).json({ error: 'Failed to create notification', details: error.message });
+    }
+});
+
+/**
+ * Mark notification as read
+ */
+app.put('/notifications/:id/read', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const docRef = db.collection('notifications').doc(id);
+        const doc = await docRef.get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Notification not found' });
+        }
+
+        await docRef.update({
+            read: true,
+            read_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
+        });
+
+        res.json({ success: true, message: 'Notification marked as read' });
+    } catch (error) {
+        console.error('Error marking notification as read:', error);
+        res.status(500).json({ error: 'Failed to update notification', details: error.message });
+    }
+});
+
+/**
+ * Mark all notifications as read
+ */
+app.put('/notifications/read-all', async (req, res) => {
+    try {
+        const snapshot = await db.collection('notifications')
+            .where('read', '==', false)
+            .get();
+
+        const batch = db.batch();
+        snapshot.forEach(doc => {
+            batch.update(doc.ref, {
+                read: true,
+                read_at: FieldValue.serverTimestamp(),
+                updated_at: FieldValue.serverTimestamp()
+            });
+        });
+
+        await batch.commit();
+
+        res.json({ 
+            success: true, 
+            message: `Marked ${snapshot.size} notifications as read` 
+        });
+    } catch (error) {
+        console.error('Error marking all notifications as read:', error);
+        res.status(500).json({ error: 'Failed to update notifications', details: error.message });
+    }
+});
+
+/**
+ * Delete a notification
+ */
+app.delete('/notifications/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const docRef = db.collection('notifications').doc(id);
+        const doc = await docRef.get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Notification not found' });
+        }
+
+        await docRef.delete();
+
+        res.json({ success: true, message: 'Notification deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting notification:', error);
+        res.status(500).json({ error: 'Failed to delete notification', details: error.message });
+    }
+});
+
+/**
+ * Get unread notification count
+ */
+app.get('/notifications/unread-count', async (req, res) => {
+    try {
+        const snapshot = await db.collection('notifications')
+            .where('read', '==', false)
+            .get();
+
+        res.json({
+            success: true,
+            count: snapshot.size
+        });
+    } catch (error) {
+        console.error('Error fetching unread count:', error);
+        res.status(500).json({ error: 'Failed to fetch unread count', details: error.message });
+    }
+});
+
+// ============================================
 // MARKETING MODULE - STATISTICS
 // ============================================
 
@@ -1561,6 +1845,282 @@ app.get('/marketing/config/status', async (req, res) => {
 });
 
 /**
+ * Upload certificate template
+ */
+app.post('/certificates/template', async (req, res) => {
+    try {
+        // Check if request body exists
+        if (!req.body) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Request body is missing',
+                details: 'No data received from client'
+            });
+        }
+
+        const { image, filename, contentType } = req.body;
+
+        if (!image) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Image data is required',
+                details: 'The image field is missing in the request body'
+            });
+        }
+
+        // Validate image data size (base64 is ~33% larger than original)
+        // If original is 5MB, base64 would be ~6.7MB, so we allow up to 10MB base64
+        const maxBase64Size = 10 * 1024 * 1024; // 10MB
+        if (image.length > maxBase64Size) {
+            return res.status(400).json({
+                success: false,
+                error: 'Image too large',
+                details: `Image data is ${(image.length / 1024 / 1024).toFixed(2)}MB. Maximum allowed is ${(maxBase64Size / 1024 / 1024).toFixed(2)}MB (base64 encoded).`
+            });
+        }
+
+        console.log('Received template upload request:', {
+            filename: filename || 'unknown',
+            contentType: contentType || 'unknown',
+            imageLength: image.length,
+            imageLengthMB: (image.length / 1024 / 1024).toFixed(2) + 'MB'
+        });
+
+        // Convert base64 to buffer
+        let base64Data = image;
+        if (base64Data.includes(',')) {
+            base64Data = base64Data.split(',')[1];
+        }
+        
+        let imageBuffer;
+        try {
+            imageBuffer = Buffer.from(base64Data, 'base64');
+            console.log('Image buffer created, size:', imageBuffer.length);
+        } catch (bufferError) {
+            console.error('Error creating buffer:', bufferError);
+            return res.status(400).json({ 
+                error: 'Invalid image data format',
+                details: bufferError.message 
+            });
+        }
+
+        // Determine file extension from content type or filename
+        let fileExtension = 'jpg';
+        if (contentType) {
+            if (contentType.includes('png')) fileExtension = 'png';
+            else if (contentType.includes('gif')) fileExtension = 'gif';
+            else if (contentType.includes('jpeg') || contentType.includes('jpg')) fileExtension = 'jpg';
+        } else if (filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            if (['jpg', 'jpeg', 'png', 'gif'].includes(ext)) {
+                fileExtension = ext === 'jpeg' ? 'jpg' : ext;
+            }
+        }
+
+        const storageFileName = `certificate-templates/template.${fileExtension}`;
+
+        // Upload to Firebase Storage
+        let bucket;
+        try {
+            // Try to get the default bucket
+            bucket = storage.bucket();
+            
+            // If no default bucket, try to get it from project ID
+            if (!bucket || !bucket.name) {
+                const projectId = process.env.GCLOUD_PROJECT || admin.app().options.projectId;
+                if (projectId) {
+                    console.log('Attempting to use project-specific bucket:', `${projectId}.appspot.com`);
+                    bucket = storage.bucket(`${projectId}.appspot.com`);
+                }
+            }
+            
+            if (!bucket || !bucket.name) {
+                throw new Error('Storage bucket is not initialized. Please check Firebase Storage configuration.');
+            }
+            
+            console.log('Storage bucket initialized:', bucket.name);
+            
+            // Verify bucket exists and is accessible
+            const [exists] = await bucket.exists();
+            if (!exists) {
+                throw new Error(`Storage bucket "${bucket.name}" does not exist. Please create it in Firebase Console.`);
+            }
+            console.log('Bucket verified and accessible');
+        } catch (bucketError) {
+            console.error('Error initializing storage bucket:', bucketError);
+            console.error('Bucket error details:', {
+                code: bucketError.code,
+                message: bucketError.message,
+                stack: bucketError.stack
+            });
+            throw new Error(`Failed to initialize storage bucket: ${bucketError.message}`);
+        }
+
+        const file = bucket.file(storageFileName);
+        console.log('Uploading to storage:', {
+            bucket: bucket.name,
+            fileName: storageFileName,
+            fileSize: imageBuffer.length,
+            contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`
+        });
+
+        // Delete existing template if it exists (to avoid conflicts)
+        try {
+            const existingFile = bucket.file(storageFileName);
+            const [exists] = await existingFile.exists();
+            if (exists) {
+                console.log('Deleting existing template file');
+                await existingFile.delete();
+            }
+        } catch (deleteError) {
+            console.warn('Could not delete existing template (may not exist):', deleteError.message);
+            // Continue anyway
+        }
+
+        // Upload the file
+        try {
+            await file.save(imageBuffer, {
+                metadata: {
+                    contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`,
+                    metadata: {
+                        uploadedAt: new Date().toISOString(),
+                        filename: filename || `template.${fileExtension}`,
+                        purpose: 'certificate_template'
+                    }
+                },
+                resumable: false // Use simple upload for smaller files
+            });
+            console.log('File saved to storage successfully');
+        } catch (saveError) {
+            console.error('Error saving file to storage:', saveError);
+            console.error('Save error details:', {
+                code: saveError.code,
+                message: saveError.message,
+                stack: saveError.stack
+            });
+            throw new Error(`Failed to save file to storage: ${saveError.message}`);
+        }
+
+        // Make file publicly accessible
+        let publicUrl;
+        try {
+            await file.makePublic();
+            console.log('File made public successfully');
+            publicUrl = `https://storage.googleapis.com/${bucket.name}/${storageFileName}`;
+        } catch (publicError) {
+            console.warn('Warning: Could not make file public:', publicError.message);
+            // Try to get signed URL as fallback
+            try {
+                const [signedUrl] = await file.getSignedUrl({
+                    action: 'read',
+                    expires: '03-09-2491' // Far future date
+                });
+                publicUrl = signedUrl;
+                console.log('Using signed URL as fallback');
+            } catch (signedUrlError) {
+                console.error('Could not generate signed URL:', signedUrlError);
+                // Still try to construct public URL
+                publicUrl = `https://storage.googleapis.com/${bucket.name}/${storageFileName}`;
+            }
+        }
+
+        console.log('Public URL:', publicUrl);
+
+        // Save template info to Firestore
+        try {
+            const templateData = {
+                url: publicUrl,
+                filename: filename || `template.${fileExtension}`,
+                contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`,
+                storage_path: storageFileName,
+                bucket_name: bucket.name,
+                uploaded_at: FieldValue.serverTimestamp(),
+                updated_at: FieldValue.serverTimestamp()
+            };
+            
+            await db.collection('certificate_settings').doc('template').set(templateData, { merge: true });
+            console.log('Template info saved to Firestore successfully');
+        } catch (firestoreError) {
+            console.error('Error saving template info to Firestore:', firestoreError);
+            // Even if Firestore save fails, the file is uploaded, so we can still return success
+            // but log the error
+            console.warn('Warning: File uploaded but Firestore save failed. File URL:', publicUrl);
+        }
+
+        res.json({
+            success: true,
+            message: 'Certificate template uploaded successfully',
+            data: {
+                url: publicUrl,
+                filename: filename || `template.${fileExtension}`
+            }
+        });
+    } catch (error) {
+        console.error('Error uploading certificate template:', error);
+        console.error('Error stack:', error.stack);
+        console.error('Error name:', error.name);
+        console.error('Error code:', error.code);
+        
+        // More specific error messages
+        let errorMessage = 'Failed to upload certificate template';
+        let errorDetails = error.message;
+        
+        if (error.code === 'ENOENT') {
+            errorMessage = 'Storage path not found';
+            errorDetails = 'The storage bucket or path does not exist';
+        } else if (error.code === 'EACCES' || error.code === 'EPERM') {
+            errorMessage = 'Permission denied';
+            errorDetails = 'Insufficient permissions to write to Firebase Storage';
+        } else if (error.code === 'ECONNREFUSED') {
+            errorMessage = 'Connection refused';
+            errorDetails = 'Could not connect to Firebase Storage';
+        } else if (error.message && error.message.includes('storage')) {
+            errorMessage = 'Firebase Storage error';
+            errorDetails = error.message;
+        } else if (error.message && error.message.includes('Firestore')) {
+            errorMessage = 'Firestore database error';
+            errorDetails = error.message;
+        }
+        
+        res.status(500).json({
+            success: false,
+            error: errorMessage,
+            details: errorDetails,
+            code: error.code || 'UNKNOWN_ERROR',
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+});
+
+/**
+ * Get certificate template
+ */
+app.get('/certificates/template', async (req, res) => {
+    try {
+        const doc = await db.collection('certificate_settings').doc('template').get();
+
+        if (!doc.exists) {
+            return res.json({
+                success: true,
+                data: null,
+                message: 'No template uploaded yet'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: doc.data()
+        });
+    } catch (error) {
+        console.error('Error fetching certificate template:', error);
+        res.status(500).json({
+            error: 'Failed to fetch certificate template',
+            details: error.message
+        });
+    }
+});
+
+/**
  * Health check
  */
 app.get('/health', (req, res) => {
@@ -1573,6 +2133,51 @@ app.get('/health', (req, res) => {
             whatsapp: isWhatsAppConfigured() ? 'configured' : 'not configured'
         }
     });
+});
+
+/**
+ * Test WhatsApp message sending
+ * POST /test/whatsapp
+ * Body: { phone_number: "7500988212", message: "Hie" }
+ */
+app.post('/test/whatsapp', async (req, res) => {
+    try {
+        const { phone_number, message } = req.body;
+
+        if (!phone_number) {
+            return res.status(400).json({ error: 'phone_number is required' });
+        }
+
+        if (!message) {
+            return res.status(400).json({ error: 'message is required' });
+        }
+
+        // Check if WhatsApp is configured
+        if (!isWhatsAppConfigured()) {
+            return res.status(503).json({
+                error: 'WhatsApp service is not configured',
+                configured: false
+            });
+        }
+
+        console.log(`🧪 Testing WhatsApp message to ${phone_number}: "${message}"`);
+
+        // Send test message
+        const result = await sendBulkWhatsApp(phone_number, message);
+
+        res.json({
+            success: true,
+            message: 'Test message sent successfully',
+            data: result
+        });
+    } catch (error) {
+        console.error('Error in test WhatsApp:', error);
+        res.status(500).json({
+            error: 'Failed to send test message',
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
 });
 
 // ============================================
@@ -1614,12 +2219,15 @@ exports.processScheduledCampaigns = functions.pubsub
                         .filter(d => d.exists)
                         .map(d => ({ id: d.id, ...d.data() }));
 
+                    const certificateAttachment = campaign.certificate_attachment || null;
+
                     await sendCampaignMessages(
                         campaign.id,
                         campaign.type,
                         campaign.subject,
                         campaign.message,
-                        contacts
+                        contacts,
+                        certificateAttachment
                     );
 
                     console.log(`Campaign ${campaign.id} processed successfully`);
