@@ -38,17 +38,19 @@ const getCertificateHTML = (data, imageDataUrl) => {
 
     .recipient-name {
       position: absolute;
-      top: 48.5%;
+      top: 49.7%;
       left: 50%;
       transform: translate(-50%, -50%);
       font-family: 'Alex Brush', cursive;
       font-size: 58px;
+      font-weight: bold;
+      font-style: italic;
       color: #df2c2c;
       text-align: center;
       width: 80%;
       white-space: nowrap;
       padding-bottom: 5px;
-      border-bottom: 2px solid #333; /* The dash in the design */
+      border-bottom: 2px solid #333; /* Single underline - template already has "IS AWARDED TO:" */
       display: inline-block;
       width: auto;
       min-width: 400px;
@@ -56,7 +58,7 @@ const getCertificateHTML = (data, imageDataUrl) => {
 
     .info-container {
       position: absolute;
-      bottom: 185px;
+      bottom: 195px;
       left: 0;
       width: 100%;
       display: flex;
@@ -69,13 +71,21 @@ const getCertificateHTML = (data, imageDataUrl) => {
       flex: 1;
     }
 
+    .info-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #1a1a1a;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 5px;
+    }
+
     .info-value {
       font-size: 13px;
       font-weight: 700;
       color: #1a1a1a;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      margin-top: 15px; /* Adjust based on where "AWARDE PROFESSION" label is */
     }
 
     .watermark-vertical {
@@ -111,16 +121,19 @@ const getCertificateHTML = (data, imageDataUrl) => {
 </head>
 <body>
   <div class="certificate">
-    <div class="recipient-name">${data.recipient_name}.</div>
+    <div class="recipient-name">${data.recipient_name || data.name || 'Recipient Name'}</div>
     
     <div class="info-container">
       <div class="info-box">
+        <div class="info-label">AWARDE PROFESSION</div>
         <div class="info-value">${data.professional || data.Professional || 'RERA CONSULTANT'}</div>
       </div>
       <div class="info-box">
+        <div class="info-label">CERTIFICATE NUMBER</div>
         <div class="info-value">${data.certificate_number || data.certificateNumber || '-'}</div>
       </div>
       <div class="info-box">
+        <div class="info-label">AWARDE RERA NUMBER</div>
         <div class="info-value">${data.award_rera_number || data.reraAwardeNo || '-'}</div>
       </div>
     </div>

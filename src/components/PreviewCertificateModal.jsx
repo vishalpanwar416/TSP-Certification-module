@@ -2,7 +2,7 @@ import { X, Download, FileText, Loader } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { generateCertificateDataUrl } from '../utils/certificateGenerator';
 
-function PreviewCertificateModal({ certificate, onClose }) {
+function PreviewCertificateModal({ certificate, onClose, certificateTemplate }) {
     const [previewUrl, setPreviewUrl] = useState(null);
     const [loading, setLoading] = useState(true);
 
@@ -10,18 +10,33 @@ function PreviewCertificateModal({ certificate, onClose }) {
         if (certificate) {
             generatePreview();
         }
-    }, [certificate]);
+    }, [certificate, certificateTemplate]);
 
     const generatePreview = async () => {
         setLoading(true);
         try {
-            // For default certificate, use the template URL directly
+            // For default certificate, generate preview with demo data
             if (certificate.id === 'default' || certificate.is_default) {
-                const url = certificate.pdf_url || '/Certificate.jpg';
+                // Create demo certificate data for preview
+                const demoData = {
+                    recipient_name: 'John Doe',
+                    name: 'John Doe',
+                    certificate_number: 'TSP-2024-001',
+                    certificateNumber: 'TSP-2024-001',
+                    award_rera_number: 'PRM/KA/RERA/1251/309/AG/250318/006037',
+                    rera_awarde_no: 'PRM/KA/RERA/1251/309/AG/250318/006037',
+                    professional: 'RERA CONSULTANT',
+                    Professional: 'RERA CONSULTANT'
+                };
+                // Use uploaded template URL if available, otherwise use default
+                const templateUrl = certificateTemplate?.url || certificate.pdf_url || null;
+                const url = await generateCertificateDataUrl(demoData, templateUrl);
                 setPreviewUrl(url);
                 setLoading(false);
             } else {
-                const url = await generateCertificateDataUrl(certificate);
+                // For regular certificates, use their template if available
+                const templateUrl = certificateTemplate?.url || null;
+                const url = await generateCertificateDataUrl(certificate, templateUrl);
                 setPreviewUrl(url);
                 setLoading(false);
             }
@@ -47,7 +62,11 @@ function PreviewCertificateModal({ certificate, onClose }) {
                             Certificate Preview
                         </h2>
                         <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-                            {certificate.name || certificate.recipient_name} - {certificate.certificate_number || certificate.certificateNumber}
+                            {certificate.id === 'default' || certificate.is_default ? (
+                                <>Demo Preview - {certificate.name || certificate.recipient_name} - {certificate.certificate_number || certificate.certificateNumber}</>
+                            ) : (
+                                <>{certificate.name || certificate.recipient_name} - {certificate.certificate_number || certificate.certificateNumber}</>
+                            )}
                         </p>
                     </div>
                     <button className="modal-close" onClick={onClose}>

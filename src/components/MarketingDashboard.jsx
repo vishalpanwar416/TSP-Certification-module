@@ -2805,6 +2805,7 @@ function MarketingDashboard() {
                 <PreviewCertificateModal
                     certificate={previewCertificate}
                     onClose={() => setShowPreviewModal(false)}
+                    certificateTemplate={certificateTemplate}
                 />
             )}
         </div>
