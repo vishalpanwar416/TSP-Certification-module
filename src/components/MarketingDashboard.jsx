@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../utils/api';
 import {
     Send,
     Download,
@@ -711,6 +712,7 @@ function MarketingDashboard() {
 
     // Load data from Firebase on mount
     useEffect(() => {
+        console.log('[API DEBUG] Using Base URL:', API_BASE_URL);
         loadDataFromFirebase();
         loadNotifications();
     }, []);
@@ -741,8 +743,7 @@ function MarketingDashboard() {
     useEffect(() => {
         const loadCertificateTemplate = async () => {
             try {
-                const apiUrl = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
-                const response = await fetch(`${apiUrl}/certificates/template`);
+                const response = await fetch(`${API_BASE_URL}/certificates/template`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.success) {
@@ -1685,11 +1686,10 @@ function MarketingDashboard() {
                     throw new Error(`Image is too large (${(base64String.length / 1024 / 1024).toFixed(2)}MB). Please use an image smaller than 5MB.`);
                 }
 
-                const apiUrl = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
-                console.log('Uploading to:', `${apiUrl}/certificates/template`);
+                console.log('Uploading to:', `${API_BASE_URL}/certificates/template`);
 
                 // Check if API URL is accessible
-                if (!apiUrl || apiUrl === 'undefined') {
+                if (!API_BASE_URL || API_BASE_URL === 'undefined') {
                     throw new Error('API URL is not configured. Please set VITE_API_URL environment variable.');
                 }
 
@@ -1864,8 +1864,7 @@ function MarketingDashboard() {
                                         onClick={async () => {
                                             if (window.confirm('Are you sure you want to remove the custom template and use the default?')) {
                                                 try {
-                                                    const apiUrl = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
-                                                    const response = await fetch(`${apiUrl}/certificates/template`, {
+                                                    const response = await fetch(`${API_BASE_URL}/certificates/template`, {
                                                         method: 'DELETE'
                                                     });
                                                     if (response.ok) {
