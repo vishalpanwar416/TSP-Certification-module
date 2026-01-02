@@ -23,10 +23,10 @@ const whatsappConfig = {
     accessToken: config.whatsapp?.access_token,
     businessAccountId: config.whatsapp?.business_account_id,
     apiVersion: config.whatsapp?.api_version || 'v18.0',
-    
+
     // AiSensy Config
     apiKey: config.whatsapp?.api_key,
-    campaignName: config.whatsapp?.campaign_name || 'certificate_delivery'
+    campaignName: config.whatsapp?.campaign_name || 'bulk_message'
 };
 
 // API URLs
@@ -41,7 +41,7 @@ const isWhatsAppConfigured = () => {
     const metaConfigured = !!(whatsappConfig.phoneNumberId && whatsappConfig.accessToken);
     // Check for AiSensy
     const aisensyConfigured = !!whatsappConfig.apiKey;
-    
+
     return metaConfigured || aisensyConfigured;
 };
 
@@ -137,33 +137,50 @@ const sendMetaMessage = async (recipientNumber, message) => {
 /**
  * Send a message via AiSensy API
  */
-const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, filename = null) => {
+const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, filename = null, customCampaignName = null) => {
     if (!isWhatsAppConfigured()) {
         throw new Error('AiSensy API is not configured. Please set up your API key.');
     }
 
+    const campaign = customCampaignName || whatsappConfig.campaignName;
     const formattedNumber = formatPhoneNumber(recipientNumber);
-    console.log(`📤 Sending AiSensy message to ${formattedNumber} (original: ${recipientNumber})`);
+    console.log(`📤 Sending AiSensy message to ${formattedNumber} (Campaign: ${campaign})`);
 
     // AiSensy API body - message goes in templateParams array
     const body = {
         apiKey: whatsappConfig.apiKey,
-        campaignName: whatsappConfig.campaignName,
+        campaignName: campaign,
         destination: formattedNumber,
         userName: 'User',
         source: 'API',
-        templateParams: Array.isArray(message) ? message : [message] // Support both array and string
+        templateParams: Array.isArray(message) ? message : [message]
     };
 
-    // If there's media/document
-    if (mediaUrl) {
-        body.media = {
-            url: mediaUrl,
-            filename: filename || 'document.pdf'
+    let finalMediaUrl = mediaUrl;
+    if (mediaUrl && (mediaUrl.includes('localhost') || mediaUrl.includes('127.0.0.1'))) {
+        console.warn('⚠️ Sending a LOCALHOST/EMULATOR URL to AiSensy. Unless you are using ngrok, AiSensy will fail to download this file.');
+    }
+
+    // Construct media object if URL is provided
+    let media = undefined;
+    if (finalMediaUrl) {
+        media = {
+            url: finalMediaUrl,
+            filename: filename || (finalMediaUrl.endsWith('.jpg') || finalMediaUrl.endsWith('.jpeg') ? 'certificate.jpg' : 'certificate.pdf')
         };
     }
 
-    console.log('AiSensy Request Body:', JSON.stringify(body, null, 2));
+    const payload = {
+        ...body,
+        media: media
+    };
+
+    console.log('🚀 Sending request to AiSensy:', JSON.stringify({
+        ...payload,
+        apiKey: 'REDACTED', // Don't log the API key
+        destination: formattedNumber,
+        campaignName: body.campaignName
+    }, null, 2));
 
     try {
         const response = await fetch(AISENSY_API_URL, {
@@ -171,7 +188,7 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(body),
+            body: JSON.stringify(payload),
         });
 
         const responseText = await response.text();
@@ -228,7 +245,7 @@ const sendWhatsAppMessage = async (recipientNumber, message) => {
     }
 
     const activeAPI = getActiveAPI();
-    
+
     if (activeAPI === 'meta') {
         return sendMetaMessage(recipientNumber, message);
     } else if (activeAPI === 'aisensy') {
@@ -251,7 +268,7 @@ const sendWhatsAppTemplate = async (recipientNumber, templateName, languageCode 
     }
 
     const activeAPI = getActiveAPI();
-    
+
     if (activeAPI === 'meta') {
         const formattedNumber = formatPhoneNumber(recipientNumber);
 
@@ -306,7 +323,7 @@ const sendWhatsAppDocument = async (recipientNumber, documentUrl, filename, capt
     }
 
     const activeAPI = getActiveAPI();
-    
+
     if (activeAPI === 'meta') {
         const formattedNumber = formatPhoneNumber(recipientNumber);
 
@@ -366,12 +383,35 @@ const sendCertificateLinkViaWhatsApp = async (recipientNumber, certificateUrl, c
 };
 
 /**
- * Send bulk WhatsApp messages
- * @param {string} recipientNumber - Recipient's phone number
- * @param {string} message - Message content
+ * Send a bulk WhatsApp message with optional media
  */
-const sendBulkWhatsApp = async (recipientNumber, message) => {
-    return sendWhatsAppMessage(recipientNumber, message);
+const sendBulkWhatsApp = async (recipientNumber, message, mediaUrl = null, filename = null, customCampaignName = null) => {
+    if (!isWhatsAppConfigured()) {
+        throw new Error('WhatsApp is not configured.');
+    }
+
+    const activeAPI = getActiveAPI();
+
+    if (activeAPI === 'aisensy') {
+        // Priority: 1. Manual override, 2. Auto-switch for media, 3. Config default
+        let campaignName = customCampaignName;
+
+        if (!campaignName) {
+            if (mediaUrl) {
+                campaignName = 'bulk_message';
+                console.log(`📎 Media detected, auto-selecting AiSensy campaign: ${campaignName}`);
+            }
+        }
+
+        return sendAiSensyMessage(recipientNumber, message, mediaUrl, filename, campaignName);
+    } else {
+        // For Meta, we might need a different approach for media + text
+        // If there's media, use document/image message
+        if (mediaUrl) {
+            return sendWhatsAppDocument(recipientNumber, mediaUrl, filename, message);
+        }
+        return sendWhatsAppMessage(recipientNumber, message);
+    }
 };
 
 /**
@@ -383,7 +423,7 @@ const getBusinessProfile = async () => {
     }
 
     const activeAPI = getActiveAPI();
-    
+
     if (activeAPI === 'meta') {
         try {
             const response = await fetch(
@@ -405,8 +445,8 @@ const getBusinessProfile = async () => {
         }
     } else {
         // AiSensy
-        return { 
-            api: 'aisensy', 
+        return {
+            api: 'aisensy',
             status: 'active',
             campaignName: whatsappConfig.campaignName
         };
@@ -422,7 +462,7 @@ const getPhoneNumberStatus = async () => {
     }
 
     const activeAPI = getActiveAPI();
-    
+
     if (activeAPI === 'meta') {
         try {
             const response = await fetch(
@@ -453,9 +493,9 @@ const getPhoneNumberStatus = async () => {
         }
     } else {
         // AiSensy
-        return { 
-            configured: true, 
-            valid: true, 
+        return {
+            configured: true,
+            valid: true,
             api: 'aisensy',
             campaignName: whatsappConfig.campaignName
         };

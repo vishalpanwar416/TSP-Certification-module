@@ -51,7 +51,7 @@ export const AuthProvider = ({ children }) => {
             })
             .catch((error) => {
                 console.error('Redirect sign-in error:', error);
-            });
+        });
 
         return unsubscribe;
     }, []);

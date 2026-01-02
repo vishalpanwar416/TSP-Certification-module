@@ -17,7 +17,6 @@ import {
     Users,
     BarChart3,
     Bell,
-    Search,
     Menu,
     ChevronLeft,
     HelpCircle,
@@ -120,7 +119,6 @@ function Dashboard() {
     const [sidebarHovered, setSidebarHovered] = useState(false);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('dashboard');
-    const [searchQuery, setSearchQuery] = useState('');
 
     // Fetch certificates
     const fetchCertificates = async () => {
@@ -158,12 +156,8 @@ function Dashboard() {
         fetchStats();
     }, []);
 
-    // Filter certificates based on search
-    const filteredCertificates = certificates.filter(cert =>
-        cert.recipient_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        cert.certificate_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        cert.phone_number?.includes(searchQuery)
-    );
+    // Use all certificates (no filtering)
+    const filteredCertificates = certificates;
 
     // Handle create certificate
     const handleCreateSuccess = () => {
@@ -416,17 +410,6 @@ function Dashboard() {
                     </div>
 
                     <div className="header-right">
-                        <div className="header-search">
-                            <Search size={18} className="search-icon" />
-                            <input
-                                type="text"
-                                className="search-input"
-                                placeholder="Search certificates..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                            />
-                        </div>
-
                         <button className="header-icon-btn notification-btn">
                             <Bell size={20} />
                             {stats.pending > 0 && (
@@ -557,10 +540,7 @@ function Dashboard() {
                                     Certificates
                                 </h2>
                                 <p className="card-description">
-                                    {searchQuery
-                                        ? `Showing ${filteredCertificates.length} of ${certificates.length} certificates`
-                                        : `Manage all ${certificates.length} generated certificates`
-                                    }
+                                    Manage all {certificates.length} generated certificates
                                 </p>
                             </div>
                             <div className="card-header-actions">
@@ -585,22 +565,17 @@ function Dashboard() {
                                 <div className="empty-icon">
                                     <Award size={64} />
                                 </div>
-                                <h3>{searchQuery ? 'No certificates found' : 'No certificates yet'}</h3>
+                                <h3>No certificates yet</h3>
                                 <p>
-                                    {searchQuery
-                                        ? `No certificates match "${searchQuery}". Try a different search term.`
-                                        : 'Create your first certificate to get started with the certification module.'
-                                    }
+                                    Create your first certificate to get started with the certification module.
                                 </p>
-                                {!searchQuery && (
-                                    <button
-                                        className="btn btn-primary"
-                                        onClick={() => setShowCreateModal(true)}
-                                    >
-                                        <Plus size={20} />
-                                        Create Your First Certificate
-                                    </button>
-                                )}
+                                <button
+                                    className="btn btn-primary"
+                                    onClick={() => setShowCreateModal(true)}
+                                >
+                                    <Plus size={20} />
+                                    Create Your First Certificate
+                                </button>
                             </div>
                         ) : (
                             <div className="table-container">

@@ -343,17 +343,17 @@ function Login() {
                         border: '1px solid rgba(255, 255, 255, 0.2)',
                         boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
                     }}>
-                        <p style={{
+                    <p style={{
                             fontSize: 'clamp(0.875rem, 1.6vw, 1rem)',
                             opacity: 1,
-                            fontWeight: '600',
+                        fontWeight: '600',
                             letterSpacing: '1px',
                             fontFamily: "'Poppins', sans-serif",
                             margin: 0,
                             textTransform: 'uppercase'
-                        }}>
-                            TOP SELLING PROPERTIES
-                        </p>
+                    }}>
+                        TOP SELLING PROPERTIES
+                    </p>
                     </div>
                     <p style={{
                         fontSize: 'clamp(0.875rem, 1.5vw, 1rem)',
@@ -681,14 +681,14 @@ function Login() {
                             width: '100%',
                             padding: '1rem 1.5rem',
                             fontSize: '0.9375rem',
-                            fontWeight: '600',
+                                fontWeight: '600',
                             marginTop: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
                             gap: '0.625rem',
                             transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                            position: 'relative',
+                                position: 'relative',
                             overflow: 'hidden',
                             borderRadius: '12px',
                             background: 'linear-gradient(135deg, #d32f2f 0%, #c62828 100%)',
@@ -737,23 +737,23 @@ function Login() {
                     margin: '2rem 0',
                     gap: '1rem'
                 }}>
-                    <div style={{ 
-                        flex: 1, 
-                        height: '1px', 
+                        <div style={{ 
+                            flex: 1, 
+                            height: '1px', 
                         background: 'linear-gradient(to right, transparent, #e0e0e0, #e0e0e0)'
-                    }}></div>
-                    <span style={{ 
+                        }}></div>
+                        <span style={{ 
                         color: '#9e9e9e', 
                         fontSize: '0.8125rem',
                         fontWeight: '500',
                         letterSpacing: '0.5px',
                         padding: '0 0.75rem'
-                    }}>OR</span>
-                    <div style={{ 
-                        flex: 1, 
-                        height: '1px', 
+                        }}>OR</span>
+                        <div style={{ 
+                            flex: 1, 
+                            height: '1px', 
                         background: 'linear-gradient(to left, transparent, #e0e0e0, #e0e0e0)'
-                    }}></div>
+                        }}></div>
                 </div>
 
                 {/* Google Sign In */}

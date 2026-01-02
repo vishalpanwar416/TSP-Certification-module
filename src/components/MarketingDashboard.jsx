@@ -55,33 +55,33 @@ import PreviewCertificateModal from './PreviewCertificateModal';
 // Utility function to safely parse Firestore timestamps
 const parseFirestoreDate = (timestamp) => {
     if (!timestamp) return null;
-    
+
     // If it's already a Date object
     if (timestamp instanceof Date) {
         return timestamp;
     }
-    
+
     // If it's a Firestore Timestamp object with seconds property (from Admin SDK)
     if (timestamp.seconds !== undefined) {
         return new Date(timestamp.seconds * 1000 + (timestamp.nanoseconds || 0) / 1000000);
     }
-    
+
     // If it's a Firestore Timestamp object with _seconds property (serialized format)
     if (timestamp._seconds !== undefined) {
         return new Date(timestamp._seconds * 1000 + (timestamp._nanoseconds || 0) / 1000000);
     }
-    
+
     // If it's a Firestore Timestamp object with toDate method
     if (typeof timestamp.toDate === 'function') {
         return timestamp.toDate();
     }
-    
+
     // If it's a number (milliseconds or seconds)
     if (typeof timestamp === 'number') {
         // If it's less than 1e12, it's likely seconds, otherwise milliseconds
         return new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp);
     }
-    
+
     // If it's a string, try to parse it
     if (typeof timestamp === 'string') {
         const parsed = new Date(timestamp);
@@ -89,12 +89,12 @@ const parseFirestoreDate = (timestamp) => {
             return parsed;
         }
     }
-    
+
     // If it's an object with a toMillis method (Firestore Timestamp)
     if (timestamp && typeof timestamp.toMillis === 'function') {
         return new Date(timestamp.toMillis());
     }
-    
+
     return null;
 };
 
@@ -111,13 +111,13 @@ const formatDate = (timestamp, options = {}) => {
         console.warn('Invalid date format:', timestamp);
         return 'N/A';
     }
-    
-    const defaultOptions = { 
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric' 
+
+    const defaultOptions = {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
     };
-    
+
     return date.toLocaleDateString('en-US', { ...defaultOptions, ...options });
 };
 
@@ -133,7 +133,7 @@ const formatDateTime = (timestamp) => {
         console.warn('Invalid date format:', timestamp);
         return 'N/A';
     }
-    
+
     return date.toLocaleString('en-US', {
         year: 'numeric',
         month: 'short',
@@ -328,7 +328,7 @@ function ContactUploadModal({ onClose, onUpload }) {
 }
 
 // Campaign Compose Modal
-function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
+function ComposeModal({ type, contacts, certificates = [], templates = [], onClose, onSend }) {
     const [subject, setSubject] = useState('');
     const [message, setMessage] = useState('');
     const [selectedContacts, setSelectedContacts] = useState([]);
@@ -339,6 +339,7 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
     const [selectedCertificate, setSelectedCertificate] = useState('');
     const [formatPDF, setFormatPDF] = useState(true);
     const [formatJPG, setFormatJPG] = useState(false);
+    const [whatsappCampaign, setWhatsappCampaign] = useState('');
 
     const filteredContacts = contacts.filter(contact =>
         contact.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -380,9 +381,6 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
             alert('Please select a certificate to include');
             return;
         }
-        if (includeCertificate && selectedCertificate === 'default') {
-            // Default certificate is always available, no need to validate further
-        }
         if (includeCertificate && !formatPDF && !formatJPG) {
             alert('Please select at least one format (PDF or JPG)');
             return;
@@ -401,7 +399,8 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
                         pdf: formatPDF,
                         jpg: formatJPG
                     }
-                } : null
+                } : null,
+                whatsappCampaign: whatsappCampaign || null
             });
             onClose();
         } catch (error) {
@@ -478,6 +477,38 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
                     </div>
                     <div className="compose-right">
                         <h4>Message</h4>
+
+                        {/* Template Selector Dropdown */}
+                        <div className="form-group template-selector">
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <BookOpen size={16} />
+                                Use Template
+                            </label>
+                            <select
+                                className="form-input"
+                                onChange={(e) => {
+                                    const selectedTemplate = (templates || []).find(t => t.id === e.target.value);
+                                    if (selectedTemplate) {
+                                        setMessage(selectedTemplate.content || '');
+                                        if (selectedTemplate.subject && isEmail) {
+                                            setSubject(selectedTemplate.subject);
+                                        }
+                                    }
+                                }}
+                                style={{ marginBottom: '1rem' }}
+                            >
+                                <option value="">-- Select a template (optional) --</option>
+                                {(templates || [])
+                                    .filter(t => t.type === type)
+                                    .map(template => (
+                                        <option key={template.id} value={template.id}>
+                                            {template.name}
+                                        </option>
+                                    ))
+                                }
+                            </select>
+                        </div>
+
                         {isEmail && (
                             <div className="form-group">
                                 <label>Subject</label>
@@ -487,6 +518,21 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
                                     placeholder="Enter email subject..."
                                     value={subject}
                                     onChange={(e) => setSubject(e.target.value)}
+                                />
+                            </div>
+                        )}
+                        {!isEmail && (
+                            <div className="form-group">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <span>WhatsApp Campaign Name</span>
+                                    <small style={{ fontWeight: 'normal', color: '#6b7280' }}>(Optional - defaults to config or 'bulk_message' if certificate included)</small>
+                                </label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    placeholder="Enter AiSensy campaign name (e.g. bulk_message)"
+                                    value={whatsappCampaign}
+                                    onChange={(e) => setWhatsappCampaign(e.target.value)}
                                 />
                             </div>
                         )}
@@ -504,7 +550,7 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
                             <Zap size={16} />
                             <span>Use <code>{'{{name}}'}</code> to personalize with recipient's name</span>
                         </div>
-                        
+
                         {/* Certificate Attachment Section */}
                         <div className="form-group" style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontWeight: '500' }}>
@@ -521,7 +567,7 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
                                 <Award size={18} />
                                 <span>Include Certificate</span>
                             </label>
-                            
+
                             {includeCertificate && (
                                 <div style={{ marginTop: '0.75rem' }}>
                                     <div className="form-group" style={{ marginBottom: '0.75rem' }}>
@@ -535,9 +581,7 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
                                             style={{ width: '100%' }}
                                         >
                                             <option value="">-- Select a certificate --</option>
-                                            <option value="default">
-                                                📄 Default Certificate Template
-                                            </option>
+                                            <option value="default">📄 Default Certificate Template</option>
                                             {certificates.length > 0 && (
                                                 <optgroup label="Generated Certificates">
                                                     {certificates.map(cert => (
@@ -549,18 +593,18 @@ function ComposeModal({ type, contacts, certificates = [], onClose, onSend }) {
                                             )}
                                         </select>
                                         {selectedCertificate === 'default' && (
-                                            <small style={{ 
-                                                display: 'block', 
-                                                marginTop: '0.5rem', 
-                                                fontSize: '0.75rem', 
-                                                color: 'var(--info)',
+                                            <small style={{
+                                                display: 'block',
+                                                marginTop: '0.5rem',
+                                                fontSize: '0.75rem',
+                                                color: '#3b82f6',
                                                 fontStyle: 'italic'
                                             }}>
-                                                Using the default certificate template from the public folder
+                                                ℹ️ Using the default certificate template
                                             </small>
                                         )}
                                     </div>
-                                    
+
                                     <div style={{ marginTop: '0.75rem' }}>
                                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
                                             Certificate Format
@@ -1121,40 +1165,40 @@ function MarketingDashboard() {
                                     Campaign Performance
                                 </h2>
                                 <p className="card-description">Email vs WhatsApp delivery rates</p>
-                    </div>
-                </div>
+                            </div>
+                        </div>
                         <div className="card-body">
                             <div className="chart-container">
                                 <div className="chart-bars">
                                     <div className="chart-bar-group">
                                         <div className="chart-bar-label">Email</div>
                                         <div className="chart-bar-wrapper">
-                                            <div 
-                                                className="chart-bar email-bar" 
-                                                style={{ 
+                                            <div
+                                                className="chart-bar email-bar"
+                                                style={{
                                                     height: `${stats.totalContacts > 0 ? (stats.emailsSent / stats.totalContacts) * 100 : 0}%`,
                                                     maxHeight: '200px'
                                                 }}
                                             >
                                                 <span className="chart-bar-value">{stats.emailsSent}</span>
-                    </div>
-                </div>
-                    </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                     <div className="chart-bar-group">
                                         <div className="chart-bar-label">WhatsApp</div>
                                         <div className="chart-bar-wrapper">
-                                            <div 
-                                                className="chart-bar whatsapp-bar" 
-                                                style={{ 
+                                            <div
+                                                className="chart-bar whatsapp-bar"
+                                                style={{
                                                     height: `${stats.totalContacts > 0 ? (stats.whatsappSent / stats.totalContacts) * 100 : 0}%`,
                                                     maxHeight: '200px'
                                                 }}
                                             >
                                                 <span className="chart-bar-value">{stats.whatsappSent}</span>
-                </div>
-                    </div>
-                </div>
-                    </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                                 <div className="chart-legend">
                                     <div className="legend-item">
                                         <span className="legend-color email"></span>
@@ -1190,7 +1234,7 @@ function MarketingDashboard() {
                                             const partial = campaigns.filter(c => c.status === 'partial').length;
                                             const total = campaigns.length;
                                             const successRate = total > 0 ? Math.round((completed / total) * 100) : 0;
-                                            
+
                                             return (
                                                 <>
                                                     <div className="metric-item">
@@ -1199,8 +1243,8 @@ function MarketingDashboard() {
                                                             <span className="metric-value-large">{successRate}%</span>
                                                         </div>
                                                         <div className="metric-progress">
-                                                            <div 
-                                                                className="metric-progress-bar success" 
+                                                            <div
+                                                                className="metric-progress-bar success"
                                                                 style={{ width: `${successRate}%` }}
                                                             ></div>
                                                         </div>
@@ -1257,10 +1301,10 @@ function MarketingDashboard() {
                                                 </span>
                                             </div>
                                             <div className="distribution-bar">
-                                                <div 
-                                                    className="distribution-bar-fill email" 
-                                                    style={{ 
-                                                        width: `${(stats.emailsSent / (stats.emailsSent + stats.whatsappSent)) * 100}%` 
+                                                <div
+                                                    className="distribution-bar-fill email"
+                                                    style={{
+                                                        width: `${(stats.emailsSent / (stats.emailsSent + stats.whatsappSent)) * 100}%`
                                                     }}
                                                 ></div>
                                             </div>
@@ -1275,10 +1319,10 @@ function MarketingDashboard() {
                                                 </span>
                                             </div>
                                             <div className="distribution-bar">
-                                                <div 
-                                                    className="distribution-bar-fill whatsapp" 
-                                                    style={{ 
-                                                        width: `${(stats.whatsappSent / (stats.emailsSent + stats.whatsappSent)) * 100}%` 
+                                                <div
+                                                    className="distribution-bar-fill whatsapp"
+                                                    style={{
+                                                        width: `${(stats.whatsappSent / (stats.emailsSent + stats.whatsappSent)) * 100}%`
                                                     }}
                                                 ></div>
                                             </div>
@@ -1314,7 +1358,7 @@ function MarketingDashboard() {
                                         date.setDate(date.getDate() - (6 - i));
                                         return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                                     });
-                                    
+
                                     const campaignCounts = last7Days.map(day => {
                                         return campaigns.filter(c => {
                                             const created = parseFirestoreDate(c.created_at || c.createdAt);
@@ -1323,17 +1367,17 @@ function MarketingDashboard() {
                                             return createdStr === day;
                                         }).length;
                                     });
-                                    
+
                                     const maxCount = Math.max(...campaignCounts, 1);
-                                    
+
                                     return (
                                         <div className="timeline-bars">
                                             {last7Days.map((day, index) => (
                                                 <div key={day} className="timeline-bar-group">
                                                     <div className="timeline-bar-wrapper">
-                                                        <div 
-                                                            className="timeline-bar" 
-                                                            style={{ 
+                                                        <div
+                                                            className="timeline-bar"
+                                                            style={{
                                                                 height: `${(campaignCounts[index] / maxCount) * 100}%`,
                                                                 maxHeight: '120px'
                                                             }}
@@ -1616,7 +1660,7 @@ function MarketingDashboard() {
             }
 
             setTemplateUploading(true);
-            
+
             try {
                 // Convert to base64 using Promise
                 const base64String = await new Promise((resolve, reject) => {
@@ -1643,7 +1687,7 @@ function MarketingDashboard() {
 
                 const apiUrl = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
                 console.log('Uploading to:', `${apiUrl}/certificates/template`);
-                
+
                 // Check if API URL is accessible
                 if (!apiUrl || apiUrl === 'undefined') {
                     throw new Error('API URL is not configured. Please set VITE_API_URL environment variable.');
@@ -1652,7 +1696,7 @@ function MarketingDashboard() {
                 // Upload to backend with timeout
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
-                
+
                 let response;
                 try {
                     response = await fetch(`${apiUrl}/certificates/template`, {
@@ -1683,16 +1727,16 @@ function MarketingDashboard() {
 
                 let errorData;
                 let data;
-                
+
                 try {
                     const responseText = await response.text();
                     console.log('Response text:', responseText.substring(0, 200));
-                    
+
                     if (!response.ok) {
                         try {
                             errorData = JSON.parse(responseText);
                         } catch (parseError) {
-                            errorData = { 
+                            errorData = {
                                 error: `Server error (${response.status})`,
                                 details: responseText.substring(0, 200) || response.statusText
                             };
@@ -1707,9 +1751,9 @@ function MarketingDashboard() {
                         console.error('Failed to parse response as JSON:', parseError);
                         throw new Error('Invalid response format from server');
                     }
-                    
+
                     console.log('Upload successful:', data);
-                    
+
                     if (data.success && data.data) {
                         setCertificateTemplate(data.data);
                         alert('Certificate template uploaded successfully!');
@@ -1740,10 +1784,10 @@ function MarketingDashboard() {
             } catch (error) {
                 console.error('Error uploading template:', error);
                 console.error('Error stack:', error.stack);
-                
+
                 // More detailed error messages
                 let errorMessage = 'Failed to upload template';
-                
+
                 if (error.message) {
                     errorMessage = error.message;
                 } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
@@ -1753,7 +1797,7 @@ function MarketingDashboard() {
                 } else {
                     errorMessage = `Upload failed: ${error.message || error.toString()}`;
                 }
-                
+
                 alert(errorMessage);
             } finally {
                 setTemplateUploading(false);
@@ -1770,8 +1814,8 @@ function MarketingDashboard() {
                         <h2>Certificates ({certificates.length})</h2>
                     </div>
                     <div className="page-actions-right">
-                        <button 
-                            className="btn btn-outline" 
+                        <button
+                            className="btn btn-outline"
                             onClick={() => setShowTemplateUpload(!showTemplateUpload)}
                             title="Upload Certificate Template"
                         >
@@ -1809,9 +1853,9 @@ function MarketingDashboard() {
                                 <div className="template-preview-section">
                                     <p className="template-preview-label">Current Template:</p>
                                     <div className="template-preview-image-wrapper">
-                                        <img 
-                                            src={certificateTemplate.url} 
-                                            alt="Certificate Template" 
+                                        <img
+                                            src={certificateTemplate.url}
+                                            alt="Certificate Template"
                                             className="template-preview-image"
                                         />
                                     </div>
@@ -1840,32 +1884,10 @@ function MarketingDashboard() {
                                         Remove Custom Template
                                     </button>
                                 </div>
-                            ) : (
-                                <div className="template-preview-section">
-                                    <p className="template-preview-label">Default Template:</p>
-                                    <div className="template-preview-image-wrapper">
-                                        <img 
-                                            src="/Certificate.jpg" 
-                                            alt="Default Certificate Template" 
-                                            className="template-preview-image"
-                                            onError={(e) => {
-                                                e.target.style.display = 'none';
-                                                e.target.nextSibling.style.display = 'block';
-                                            }}
-                                        />
-                                        <div style={{ display: 'none', padding: 'var(--spacing-lg)', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                            <p>Default certificate image not found</p>
-                                            <p style={{ fontSize: '0.875rem' }}>Upload a template to get started</p>
-                                        </div>
-                                    </div>
-                                    <p style={{ marginTop: 'var(--spacing-sm)', fontSize: '0.875rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                                        This is the default certificate template. Upload a custom template to replace it.
-                                    </p>
-                                </div>
-                            )}
+                            ) : null}
                             <div className="form-group template-upload-group">
                                 <label className="form-label template-upload-label">
-                                    <Upload size={18} />
+                                    <Upload size={20} />
                                     Upload Blank Certificate Image
                                 </label>
                                 <div className="file-upload-wrapper">
@@ -1877,30 +1899,40 @@ function MarketingDashboard() {
                                         disabled={templateUploading}
                                         className="file-upload-input"
                                     />
-                                    <label 
-                                        htmlFor="template-upload-input" 
+                                    <label
+                                        htmlFor="template-upload-input"
                                         className="file-upload-label"
-                                        style={{ 
+                                        style={{
                                             opacity: templateUploading ? 0.6 : 1,
                                             cursor: templateUploading ? 'not-allowed' : 'pointer'
                                         }}
                                     >
                                         {templateUploading ? (
-                                            <>
-                                                <div className="spinner" style={{ width: '20px', height: '20px', borderWidth: '2px', borderColor: 'var(--primary)', borderTopColor: 'transparent' }}></div>
-                                                <span>Uploading...</span>
-                                            </>
+                                            <div className="upload-loading-state">
+                                                <div className="spinner" style={{ width: '24px', height: '24px', borderWidth: '3px', borderColor: 'var(--primary)', borderTopColor: 'transparent' }}></div>
+                                                <span>Uploading template...</span>
+                                            </div>
                                         ) : (
-                                            <>
-                                                <Upload size={20} />
-                                                <span>Choose Image File</span>
-                                            </>
+                                            <div className="upload-ready-state">
+                                                <div className="upload-icon-wrapper">
+                                                    <Upload size={32} />
+                                                </div>
+                                                <span className="upload-text">Choose Image File</span>
+                                                <span className="upload-subtext">Click or drag to upload</span>
+                                            </div>
                                         )}
                                     </label>
                                 </div>
-                                <small className="template-upload-hint">
-                                    Supported formats: JPG, PNG. Max size: 5MB. The image will be used as the background for all certificates.
-                                </small>
+                                <div className="template-upload-hint">
+                                    <div className="hint-icon">ℹ️</div>
+                                    <div className="hint-content">
+                                        <strong>Supported formats:</strong> JPG, PNG
+                                        <br />
+                                        <strong>Max size:</strong> 5MB
+                                        <br />
+                                        <span className="hint-note">The image will be used as the background for all certificates</span>
+                                    </div>
+                                </div>
                             </div>
                             {templateUploading && (
                                 <div className="template-upload-progress">
@@ -2573,10 +2605,10 @@ function MarketingDashboard() {
             {mobileMenuOpen && (
                 <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)} />
             )}
-            
+
             {/* Notification Overlay */}
             {showNotifications && (
-                <div 
+                <div
                     style={{
                         position: 'fixed',
                         top: 0,
@@ -2616,7 +2648,7 @@ function MarketingDashboard() {
                         </div>
 
                         <div className="notification-container" style={{ position: 'relative' }}>
-                            <button 
+                            <button
                                 className="header-icon-btn notification-btn"
                                 onClick={() => setShowNotifications(!showNotifications)}
                             >
@@ -2625,9 +2657,9 @@ function MarketingDashboard() {
                                     <span className="notification-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
                                 )}
                             </button>
-                            
+
                             {showNotifications && (
-                                <div 
+                                <div
                                     className="notification-dropdown"
                                     style={{
                                         position: 'absolute',
@@ -2723,25 +2755,25 @@ function MarketingDashboard() {
                                                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
                                                             {getIcon()}
                                                             <div style={{ flex: 1 }}>
-                                                                <p style={{ 
-                                                                    margin: 0, 
-                                                                    fontSize: '14px', 
+                                                                <p style={{
+                                                                    margin: 0,
+                                                                    fontSize: '14px',
                                                                     fontWeight: notification.read ? '400' : '600',
                                                                     color: '#1f2937'
                                                                 }}>
                                                                     {notification.title}
                                                                 </p>
-                                                                <p style={{ 
-                                                                    margin: '4px 0 0 0', 
-                                                                    fontSize: '12px', 
+                                                                <p style={{
+                                                                    margin: '4px 0 0 0',
+                                                                    fontSize: '12px',
                                                                     color: '#6b7280'
                                                                 }}>
                                                                     {notification.message}
                                                                 </p>
                                                                 {notification.created_at && (
-                                                                    <p style={{ 
-                                                                        margin: '4px 0 0 0', 
-                                                                        fontSize: '11px', 
+                                                                    <p style={{
+                                                                        margin: '4px 0 0 0',
+                                                                        fontSize: '11px',
                                                                         color: '#9ca3af'
                                                                     }}>
                                                                         {formatDateTime(notification.created_at)}
@@ -2796,6 +2828,7 @@ function MarketingDashboard() {
                     type={composeType}
                     contacts={contacts}
                     certificates={certificates}
+                    templates={templates}
                     onClose={() => setShowComposeModal(false)}
                     onSend={handleSendMessages}
                 />

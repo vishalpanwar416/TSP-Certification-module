@@ -171,12 +171,13 @@ const isEmailConfigured = () => {
 };
 
 /**
- * Send bulk marketing email
+ * Send bulk marketing email with optional attachment
  * @param {string} recipientEmail - Recipient email address
  * @param {string} subject - Email subject
- * @param {string} htmlContent - HTML content of the email (can contain plain text)
+ * @param {string} htmlContent - HTML content of the email
+ * @param {Object[]} attachments - Optional attachments [{filename, path/content}]
  */
-const sendBulkEmail = async (recipientEmail, subject, htmlContent) => {
+const sendBulkEmail = async (recipientEmail, subject, htmlContent, attachments = []) => {
     if (!transporter) {
         throw new Error('Email service is not configured. Please set up your email credentials.');
     }
@@ -186,9 +187,9 @@ const sendBulkEmail = async (recipientEmail, subject, htmlContent) => {
         const isHtml = htmlContent.includes('<') && htmlContent.includes('>');
 
         const mailOptions = {
-            from: `"MarketHub" <${emailConfig.from}>`,
+            from: `"Top Selling Property" <${emailConfig.from}>`,
             to: recipientEmail,
-            subject: subject || 'Message from MarketHub',
+            subject: subject || 'Message from Top Selling Property',
             ...(isHtml ? {
                 html: `
                     <!DOCTYPE html>
@@ -225,13 +226,13 @@ const sendBulkEmail = async (recipientEmail, subject, htmlContent) => {
                     </head>
                     <body>
                         <div class="header">
-                            <h1>MarketHub</h1>
+                            <h1>Top Selling Property</h1>
                         </div>
                         <div class="content">
                             ${htmlContent}
                         </div>
                         <div class="footer">
-                            <p>Sent via MarketHub</p>
+                            <p>Sent via Top Selling Property</p>
                         </div>
                     </body>
                     </html>
@@ -274,18 +275,19 @@ const sendBulkEmail = async (recipientEmail, subject, htmlContent) => {
                     </head>
                     <body>
                         <div class="header">
-                            <h1>MarketHub</h1>
+                            <h1>Top Selling Property</h1>
                         </div>
                         <div class="content">
                             ${htmlContent.replace(/\n/g, '<br>')}
                         </div>
                         <div class="footer">
-                            <p>Sent via MarketHub</p>
+                            <p>Sent via Top Selling Property</p>
                         </div>
                     </body>
                     </html>
                 `,
             }),
+            attachments: attachments
         };
 
         const info = await transporter.sendMail(mailOptions);

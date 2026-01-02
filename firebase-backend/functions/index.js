@@ -3,15 +3,140 @@ const admin = require('firebase-admin');
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const { generateCertificatePDF } = require('./utils/pdfGenerator');
+const { generateCertificatePDF, generateCertificateImage } = require('./utils/pdfGenerator');
 const { sendCertificateLinkViaWhatsApp, isWhatsAppConfigured, sendBulkWhatsApp } = require('./utils/whatsappService');
 const { sendCertificateViaEmail, isEmailConfigured, sendBulkEmail } = require('./utils/emailService');
 
 // Initialize Firebase Admin
-admin.initializeApp();
+let adminApp;
+try {
+    // Check if already initialized
+    adminApp = admin.app();
+} catch (e) {
+    // Initialize if not already initialized
+    const projectId = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID;
+    adminApp = admin.initializeApp({
+        // Firebase Admin SDK automatically uses Application Default Credentials
+        // in Cloud Functions environment, so no explicit credentials needed
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET ||
+            (projectId ? `${projectId}.firebasestorage.app` : undefined) ||
+            (projectId ? `${projectId}.appspot.com` : undefined)
+    });
+}
 
 const db = admin.firestore();
 const storage = admin.storage();
+
+// Helper function to get storage bucket with proper error handling
+const getStorageBucket = async () => {
+    const projectId = process.env.GCLOUD_PROJECT ||
+        process.env.FIREBASE_PROJECT_ID ||
+        adminApp.options.projectId ||
+        adminApp.options.credential?.projectId;
+
+    // Try default bucket first (might auto-detect the correct bucket)
+    let bucket = storage.bucket();
+
+    // Verify default bucket exists, if not try explicit names
+    let defaultBucketWorks = false;
+    if (bucket && bucket.name) {
+        try {
+            const [exists] = await bucket.exists();
+            if (exists) {
+                defaultBucketWorks = true;
+            }
+        } catch (err) {
+            // Try getMetadata as fallback
+            try {
+                await bucket.getMetadata();
+                defaultBucketWorks = true;
+            } catch (metaErr) {
+                // Default bucket doesn't work
+            }
+        }
+    }
+
+    if (defaultBucketWorks) {
+        console.log(`✅ Using default storage bucket: ${bucket.name}`);
+        return bucket;
+    }
+
+    // If default doesn't work, try project-specific buckets
+    if (!bucket || !bucket.name) {
+        const bucketNames = [
+            process.env.FIREBASE_STORAGE_BUCKET,
+            process.env.STORAGE_BUCKET,
+            projectId ? `${projectId}.firebasestorage.app` : null, // New Firebase Storage format (prioritized)
+            projectId ? `${projectId}.appspot.com` : null // Legacy format
+        ].filter(Boolean);
+
+        for (const bucketName of bucketNames) {
+            try {
+                bucket = storage.bucket(bucketName);
+                // Try exists() first
+                try {
+                    const [exists] = await bucket.exists();
+                    if (exists) {
+                        console.log(`✅ Using storage bucket: ${bucket.name}`);
+                        return bucket;
+                    }
+                } catch (existsErr) {
+                    // If exists() fails, try getMetadata() as fallback
+                    // Sometimes bucket exists but exists() returns false
+                    try {
+                        await bucket.getMetadata();
+                        console.log(`✅ Using storage bucket (verified via metadata): ${bucket.name}`);
+                        return bucket;
+                    } catch (metaErr) {
+                        // Both failed, try next bucket
+                        continue;
+                    }
+                }
+            } catch (err) {
+                continue;
+            }
+        }
+    } else {
+        // Default bucket found, verify it's accessible
+        try {
+            const [exists] = await bucket.exists();
+            if (exists) {
+                console.log(`✅ Using default storage bucket: ${bucket.name}`);
+                return bucket;
+            }
+        } catch (existsErr) {
+            // Try getMetadata as fallback
+            try {
+                await bucket.getMetadata();
+                console.log(`✅ Using default storage bucket (verified via metadata): ${bucket.name}`);
+                return bucket;
+            } catch (metaErr) {
+                // Default bucket not accessible, will try explicit names below
+            }
+        }
+    }
+
+    if (!bucket || !bucket.name) {
+        throw new Error(
+            'Failed to initialize Firebase Storage bucket. ' +
+            'Please ensure Firebase Storage is enabled for your project in the Firebase Console ' +
+            'and that the service account has appropriate permissions. ' +
+            'Also, verify your project ID and bucket name configuration.'
+        );
+    }
+
+    // Final verification attempt
+    try {
+        await bucket.getMetadata();
+        return bucket;
+    } catch (err) {
+        throw new Error(
+            `Storage bucket "${bucket.name}" is not accessible. ` +
+            `Error: ${err.message}. ` +
+            'Please check Firebase Storage permissions and ensure Storage is fully enabled.'
+        );
+    }
+};
 
 // Create Express app
 const app = express();
@@ -173,7 +298,7 @@ app.post('/certificates', async (req, res) => {
         const pdfBuffer = await generateCertificatePDF(certificateData, templateUrl);
 
         // Upload to Firebase Storage
-        const bucket = storage.bucket();
+        const bucket = await getStorageBucket();
         const file = bucket.file(`certificates/${id}.pdf`);
 
         await file.save(pdfBuffer, {
@@ -215,6 +340,246 @@ app.post('/certificates', async (req, res) => {
 });
 
 /**
+ * Upload certificate template (must be before /certificates/:id)
+ */
+app.post('/certificates/template', async (req, res) => {
+    try {
+        const { image, filename } = req.body;
+
+        if (!image) {
+            return res.status(400).json({ error: 'Image data is required' });
+        }
+
+        // Parse base64 image data
+        let base64Data, contentType, fileExtension;
+        if (image.startsWith('data:')) {
+            const matches = image.match(/^data:([^;]+);base64,(.+)$/);
+            if (!matches) {
+                return res.status(400).json({ error: 'Invalid image data format. Expected data URI.' });
+            }
+            contentType = matches[1];
+            base64Data = matches[2];
+
+            // Extract file extension from content type or filename
+            if (contentType.includes('jpeg') || contentType.includes('jpg')) {
+                fileExtension = 'jpg';
+            } else if (contentType.includes('png')) {
+                fileExtension = 'png';
+            } else if (contentType.includes('gif')) {
+                fileExtension = 'gif';
+            } else {
+                fileExtension = filename ? filename.split('.').pop() : 'jpg';
+            }
+        } else {
+            // Assume it's raw base64
+            base64Data = image;
+            fileExtension = filename ? filename.split('.').pop() : 'jpg';
+            contentType = `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`;
+        }
+
+        // Convert base64 to buffer
+        let imageBuffer;
+        try {
+            imageBuffer = Buffer.from(base64Data, 'base64');
+        } catch (err) {
+            return res.status(400).json({ error: 'Invalid base64 data', details: err.message });
+        }
+
+        // Validate file size (5MB limit)
+        const maxSize = 5 * 1024 * 1024; // 5MB
+        if (imageBuffer.length > maxSize) {
+            return res.status(400).json({
+                error: 'Image too large',
+                details: `Maximum size is 5MB, got ${(imageBuffer.length / 1024 / 1024).toFixed(2)}MB`
+            });
+        }
+
+        // Upload to Firebase Storage
+        let bucket;
+        try {
+            bucket = await getStorageBucket();
+            console.log('Storage bucket initialized:', bucket.name);
+
+            // Verify bucket is accessible
+            try {
+                const [exists] = await bucket.exists();
+                if (!exists) {
+                    throw new Error(`Storage bucket "${bucket.name}" does not exist. Please enable Firebase Storage in Firebase Console.`);
+                }
+                console.log('Bucket verified and accessible');
+            } catch (verifyError) {
+                // If exists() fails, try to get bucket metadata instead
+                try {
+                    await bucket.getMetadata();
+                    console.log('Bucket metadata retrieved successfully');
+                } catch (metaError) {
+                    throw new Error(`Storage bucket "${bucket.name}" is not accessible. Error: ${metaError.message}. Please check Firebase Storage permissions.`);
+                }
+            }
+        } catch (bucketError) {
+            console.error('Storage bucket error:', bucketError);
+            return res.status(503).json({
+                error: 'Storage service unavailable',
+                message: bucketError.message,
+                details: 'Please ensure Firebase Storage is enabled and properly configured.'
+            });
+        }
+
+        const storageFileName = `certificate-templates/template.${fileExtension}`;
+        const file = bucket.file(storageFileName);
+
+        // Delete existing template if any
+        try {
+            const [exists] = await file.exists();
+            if (exists) {
+                await file.delete();
+                console.log('Deleted existing template');
+            }
+        } catch (deleteError) {
+            console.warn('Could not delete existing template:', deleteError.message);
+        }
+
+        // Upload new template
+        try {
+            await file.save(imageBuffer, {
+                metadata: {
+                    contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`,
+                    metadata: {
+                        uploadedAt: new Date().toISOString(),
+                        purpose: 'certificate_template'
+                    }
+                },
+                public: true
+            });
+            console.log('Template uploaded to:', storageFileName);
+        } catch (uploadError) {
+            console.error('Upload error:', uploadError);
+            return res.status(500).json({
+                error: 'Failed to upload template to storage',
+                details: uploadError.message
+            });
+        }
+
+        // Make file publicly accessible
+        try {
+            await file.makePublic();
+        } catch (publicError) {
+            console.warn('Could not make file public (might already be public):', publicError.message);
+        }
+
+        // Get public URL
+        let publicUrl;
+        if (process.env.FUNCTIONS_EMULATOR || process.env.FIRESTORE_EMULATOR_HOST) {
+            // Internal URL for emulator
+            publicUrl = `http://localhost:9199/${bucket.name}/${storageFileName}`;
+        } else {
+            publicUrl = `https://storage.googleapis.com/${bucket.name}/${storageFileName}`;
+        }
+
+        // Save metadata to Firestore
+        await db.collection('certificate_settings').doc('template').set({
+            url: publicUrl,
+            filename: filename || `template.${fileExtension}`,
+            contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`,
+            storage_path: storageFileName,
+            bucket_name: bucket.name,
+            uploaded_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        res.json({
+            success: true,
+            message: 'Certificate template uploaded successfully',
+            data: {
+                url: publicUrl,
+                filename: filename || `template.${fileExtension}`
+            }
+        });
+    } catch (error) {
+        console.error('Error uploading certificate template:', error);
+        res.status(500).json({
+            error: 'Failed to upload certificate template',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Get certificate template (must be before /certificates/:id)
+ */
+app.get('/certificates/template', async (req, res) => {
+    try {
+        const doc = await db.collection('certificate_settings').doc('template').get();
+
+        if (!doc.exists) {
+            return res.json({
+                success: true,
+                data: null,
+                message: 'No template uploaded yet'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: doc.data()
+        });
+    } catch (error) {
+        console.error('Error fetching certificate template:', error);
+        res.status(500).json({
+            error: 'Failed to fetch certificate template',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Delete certificate template
+ */
+app.delete('/certificates/template', async (req, res) => {
+    try {
+        const doc = await db.collection('certificate_settings').doc('template').get();
+
+        if (!doc.exists) {
+            return res.json({
+                success: true,
+                message: 'No template to delete'
+            });
+        }
+
+        const templateData = doc.data();
+
+        // Delete from Storage
+        if (templateData.storage_path) {
+            try {
+                const bucket = await getStorageBucket();
+                const file = bucket.file(templateData.storage_path);
+                const [exists] = await file.exists();
+                if (exists) {
+                    await file.delete();
+                    console.log('Deleted template from storage:', templateData.storage_path);
+                }
+            } catch (storageError) {
+                console.warn('Could not delete template from storage:', storageError.message);
+            }
+        }
+
+        // Delete from Firestore
+        await db.collection('certificate_settings').doc('template').delete();
+
+        res.json({
+            success: true,
+            message: 'Certificate template deleted successfully'
+        });
+    } catch (error) {
+        console.error('Error deleting certificate template:', error);
+        res.status(500).json({
+            error: 'Failed to delete certificate template',
+            details: error.message
+        });
+    }
+});
+
+/**
  * Get all certificates
  */
 app.get('/certificates', async (req, res) => {
@@ -222,20 +587,45 @@ app.get('/certificates', async (req, res) => {
         const limit = parseInt(req.query.limit) || 100;
         const offset = parseInt(req.query.offset) || 0;
 
-        const snapshot = await db.collection('certificates')
-            .orderBy('created_at', 'desc')
-            .limit(limit)
-            .offset(offset)
-            .get();
+        // Fetch all certificates first (without ordering to avoid index issues)
+        const allSnapshot = await db.collection('certificates').get();
+        console.log(`Total certificates in database: ${allSnapshot.size}`);
 
-        const certificates = [];
-        snapshot.forEach(doc => {
-            certificates.push({ id: doc.id, ...doc.data() });
+        // Convert to array, filter out initialization documents
+        const allCertificates = [];
+        allSnapshot.forEach(doc => {
+            // Skip initialization documents
+            if (doc.id === '_init_' || doc.data()._initialized) {
+                return;
+            }
+            const data = doc.data();
+            allCertificates.push({
+                id: doc.id,
+                ...data,
+                created_at: data.created_at || data.createdAt || null
+            });
         });
 
-        // Get total count
-        const allDocs = await db.collection('certificates').get();
-        const total = allDocs.size;
+        // Sort by created_at in memory (descending)
+        allCertificates.sort((a, b) => {
+            if (!a.created_at && !b.created_at) return 0;
+            if (!a.created_at) return 1;
+            if (!b.created_at) return -1;
+
+            const aTime = a.created_at.toDate ? a.created_at.toDate().getTime() :
+                (a.created_at._seconds ? a.created_at._seconds * 1000 :
+                    (typeof a.created_at === 'string' ? new Date(a.created_at).getTime() : 0));
+            const bTime = b.created_at.toDate ? b.created_at.toDate().getTime() :
+                (b.created_at._seconds ? b.created_at._seconds * 1000 :
+                    (typeof b.created_at === 'string' ? new Date(b.created_at).getTime() : 0));
+            return bTime - aTime; // Descending order
+        });
+
+        // Apply pagination
+        const certificates = allCertificates.slice(offset, offset + limit);
+        const total = allCertificates.length;
+
+        console.log(`Returning ${certificates.length} certificates out of ${total} total (offset: ${offset}, limit: ${limit})`);
 
         res.json({
             success: true,
@@ -337,7 +727,7 @@ app.delete('/certificates/:id', async (req, res) => {
 
         // Delete PDF from storage
         try {
-            const bucket = storage.bucket();
+            const bucket = await getStorageBucket();
             await bucket.file(`certificates/${id}.pdf`).delete();
         } catch (error) {
             console.warn('Error deleting PDF file:', error.message);
@@ -1085,7 +1475,7 @@ app.get('/marketing/campaigns/:id', async (req, res) => {
  */
 app.post('/marketing/campaigns', async (req, res) => {
     try {
-        const { type, subject, message, contactIds, templateId, scheduledAt, includeCertificate } = req.body;
+        const { type, subject, message, contactIds, templateId, scheduledAt, includeCertificate, whatsappCampaign } = req.body;
 
         if (!type || !['email', 'whatsapp'].includes(type)) {
             return res.status(400).json({ error: 'Valid type (email or whatsapp) is required' });
@@ -1151,6 +1541,7 @@ app.post('/marketing/campaigns', async (req, res) => {
             scheduled_at: scheduledAt ? new Date(scheduledAt) : null,
             sent_at: null,
             certificate_attachment: certificateAttachment,
+            whatsapp_campaign: whatsappCampaign || null,
             created_at: FieldValue.serverTimestamp(),
             updated_at: FieldValue.serverTimestamp()
         };
@@ -1160,7 +1551,7 @@ app.post('/marketing/campaigns', async (req, res) => {
         // If not scheduled, send immediately
         if (!isScheduled) {
             try {
-                await sendCampaignMessages(id, type, subject, message, contacts, certificateAttachment);
+                await sendCampaignMessages(id, type, subject, message, contacts, certificateAttachment, whatsappCampaign);
             } catch (sendError) {
                 console.error('Error sending campaign:', sendError);
             }
@@ -1182,7 +1573,7 @@ app.post('/marketing/campaigns', async (req, res) => {
 /**
  * Helper function to send campaign messages
  */
-async function sendCampaignMessages(campaignId, type, subject, message, contacts, certificateAttachment = null) {
+async function sendCampaignMessages(campaignId, type, subject, message, contacts, certificateAttachment = null, whatsappCampaign = null) {
     let sentCount = 0;
     let failedCount = 0;
     const errors = [];
@@ -1199,12 +1590,41 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
 
     for (const contact of contacts) {
         try {
-            // Personalize message
-            const personalizedMessage = message.replace(/\{\{name\}\}/gi, contact.name || 'there');
+            // Personalize message with all supported placeholders
+            const personalizeMessage = (text, contact) => {
+                if (!text) return '';
+                return text
+                    .replace(/\{\{name\}\}/gi, contact.name || 'Valued Customer')
+                    .replace(/\{\{certificate\}\}/gi, contact.certificate_number || contact.certificateNumber || '')
+                    .replace(/\{\{rera\}\}/gi, contact.rera_awarde_no || contact.reraAwardeNo || '')
+                    .replace(/\{\{professional\}\}/gi, contact.professional || '')
+                    .replace(/\{\{email\}\}/gi, contact.email || '')
+                    .replace(/\{\{phone\}\}/gi, contact.phone || '');
+            };
+
+            const personalizedMessage = personalizeMessage(message, contact);
 
             if (type === 'email' && contact.email) {
                 try {
-                    await sendBulkEmail(contact.email, subject, personalizedMessage);
+                    let attachments = [];
+
+                    // Attach certificate if requested
+                    if (certificateAttachment) {
+                        try {
+                            const certResult = await getOrCreateCertificateForContact(contact, certificateAttachment);
+                            if (certResult) {
+                                attachments.push({
+                                    filename: certResult.filename,
+                                    path: certResult.url
+                                });
+                            }
+                        } catch (certError) {
+                            console.error(`Error getting certificate for ${contact.id}:`, certError);
+                            errors.push({ contactId: contact.id, contact: contact.email, error: `Certificate generation failed: ${certError.message}` });
+                        }
+                    }
+
+                    await sendBulkEmail(contact.email, subject, personalizedMessage, attachments);
                     sentCount++;
 
                     // Update contact stats
@@ -1221,8 +1641,26 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                 }
             } else if (type === 'whatsapp' && contact.phone) {
                 try {
-                    const result = await sendBulkWhatsApp(contact.phone, personalizedMessage);
-                    
+                    let mediaUrl = null;
+                    let filename = 'certificate.pdf';
+
+                    // Attach certificate if requested
+                    if (certificateAttachment) {
+                        try {
+                            const certResult = await getOrCreateCertificateForContact(contact, certificateAttachment);
+                            if (certResult) {
+                                mediaUrl = certResult.url;
+                                filename = certResult.filename;
+                            }
+                        } catch (certError) {
+                            console.error(`Error getting certificate for ${contact.id}:`, certError);
+                            // Continue sending without certificate if generation fails
+                            errors.push({ contactId: contact.id, contact: contact.phone, error: `Certificate generation failed: ${certError.message}` });
+                        }
+                    }
+
+                    const result = await sendBulkWhatsApp(contact.phone, personalizedMessage, mediaUrl, filename, whatsappCampaign);
+
                     // Verify the message was actually sent
                     if (result && result.success !== false) {
                         sentCount++;
@@ -1245,10 +1683,10 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
             } else {
                 // No valid contact method
                 failedCount++;
-                errors.push({ 
-                    contactId: contact.id, 
-                    contact: contact.name || contact.id, 
-                    error: type === 'email' ? 'No email address' : 'No phone number' 
+                errors.push({
+                    contactId: contact.id,
+                    contact: contact.name || contact.id,
+                    error: type === 'email' ? 'No email address' : 'No phone number'
                 });
             }
         } catch (error) {
@@ -1314,7 +1752,7 @@ app.post('/marketing/campaigns/:id/send', async (req, res) => {
             .map(d => ({ id: d.id, ...d.data() }));
 
         const certificateAttachment = campaign.certificate_attachment || null;
-        
+
         const result = await sendCampaignMessages(
             id,
             campaign.type,
@@ -1722,9 +2160,9 @@ app.put('/notifications/read-all', async (req, res) => {
 
         await batch.commit();
 
-        res.json({ 
-            success: true, 
-            message: `Marked ${snapshot.size} notifications as read` 
+        res.json({
+            success: true,
+            message: `Marked ${snapshot.size} notifications as read`
         });
     } catch (error) {
         console.error('Error marking all notifications as read:', error);
@@ -1772,6 +2210,115 @@ app.get('/notifications/unread-count', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch unread count', details: error.message });
     }
 });
+
+/**
+ * Get or create a certificate for a contact
+ */
+async function getOrCreateCertificateForContact(contact, attachment) {
+    const formats = attachment.formats || { pdf: true, jpg: false };
+    // Prefer JPG for campaigns if requested (better for WhatsApp/Social)
+    const useJpg = formats.jpg === true;
+    const extension = useJpg ? 'jpg' : 'pdf';
+
+    // 1. If a specific certificate ID is provided, use that
+    if (attachment.certificateId && attachment.certificateId !== 'default') {
+        const certDoc = await db.collection('certificates').doc(attachment.certificateId).get();
+        if (certDoc.exists) {
+            const certData = certDoc.data();
+            const url = useJpg ? (certData.jpg_url || certData.pdf_url) : certData.pdf_url;
+            return {
+                url,
+                filename: `certificate_${certData.certificate_number || certDoc.id}.${extension}`
+            };
+        }
+    }
+
+    // 2. For 'default' template, we could look for an existing one, 
+    // but users often expect the LATEST template they uploaded to be used.
+    // So we'll skip reuse and generate a new one to ensure the latest customized template is applied.
+    // Only reuse if we're sure it matches. For now, let's look for existing 
+    // but we'll add a check in the next step.
+
+    // Skip reuse if customized template might have changed
+    const forceNew = true;
+
+    if (!forceNew) {
+        let existingCerts = await db.collection('certificates')
+            .where('email', '==', contact.email || '')
+            .limit(1)
+            .get();
+
+        if (existingCerts.empty && contact.phone) {
+            existingCerts = await db.collection('certificates')
+                .where('phone_number', '==', contact.phone)
+                .limit(1)
+                .get();
+        }
+
+        if (!existingCerts.empty) {
+            const certData = existingCerts.docs[0].data();
+            // If we need JPG but only have PDF, we'll continue to generate below
+            if (!(useJpg && !certData.jpg_url)) {
+                const url = useJpg ? certData.jpg_url : certData.pdf_url;
+                return {
+                    url,
+                    filename: `certificate_${certData.certificate_number || existingCerts.docs[0].id}.${extension}`
+                };
+            }
+        }
+    }
+
+    // 3. Last resort: Generate a new one for this contact
+    console.log(`Generating new ${extension} certificate for ${contact.name}`);
+
+    const certNumber = `CERT-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const certificateData = {
+        recipient_name: contact.name || 'Recipient',
+        certificate_number: certNumber,
+        award_rera_number: contact.rera_awarde_no || contact.reraAwardeNo || null,
+        professional: contact.professional || null,
+        phone_number: contact.phone || null,
+        email: contact.email || null,
+        created_at: FieldValue.serverTimestamp()
+    };
+
+    // Get template URL
+    let templateUrl = null;
+    const templateDoc = await db.collection('certificate_settings').doc('template').get();
+    if (templateDoc.exists && templateDoc.data().url) {
+        templateUrl = templateDoc.data().url;
+    }
+
+    const buffer = useJpg
+        ? await generateCertificateImage(certificateData, templateUrl)
+        : await generateCertificatePDF(certificateData, templateUrl);
+
+    const id = uuidv4();
+    const bucket = await getStorageBucket();
+    const file = bucket.file(`certificates/${id}.${extension}`);
+
+    await file.save(buffer, {
+        metadata: {
+            contentType: useJpg ? 'image/jpeg' : 'application/pdf',
+        }
+    });
+
+    await file.makePublic();
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/certificates/${id}.${extension}`;
+
+    // Save to Firestore so we don't regenerate it next time
+    const newCertData = {
+        ...certificateData,
+        id,
+        [useJpg ? 'jpg_url' : 'pdf_url']: publicUrl
+    };
+    await db.collection('certificates').doc(id).set(newCertData);
+
+    return {
+        url: publicUrl,
+        filename: `certificate_${certNumber}.${extension}`
+    };
+}
 
 // ============================================
 // MARKETING MODULE - STATISTICS
@@ -1851,7 +2398,7 @@ app.post('/certificates/template', async (req, res) => {
     try {
         // Check if request body exists
         if (!req.body) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
                 error: 'Request body is missing',
                 details: 'No data received from client'
@@ -1861,7 +2408,7 @@ app.post('/certificates/template', async (req, res) => {
         const { image, filename, contentType } = req.body;
 
         if (!image) {
-            return res.status(400).json({ 
+            return res.status(400).json({
                 success: false,
                 error: 'Image data is required',
                 details: 'The image field is missing in the request body'
@@ -1891,16 +2438,16 @@ app.post('/certificates/template', async (req, res) => {
         if (base64Data.includes(',')) {
             base64Data = base64Data.split(',')[1];
         }
-        
+
         let imageBuffer;
         try {
             imageBuffer = Buffer.from(base64Data, 'base64');
             console.log('Image buffer created, size:', imageBuffer.length);
         } catch (bufferError) {
             console.error('Error creating buffer:', bufferError);
-            return res.status(400).json({ 
+            return res.status(400).json({
                 error: 'Invalid image data format',
-                details: bufferError.message 
+                details: bufferError.message
             });
         }
 
@@ -1922,38 +2469,45 @@ app.post('/certificates/template', async (req, res) => {
         // Upload to Firebase Storage
         let bucket;
         try {
-            // Try to get the default bucket
-            bucket = storage.bucket();
-            
-            // If no default bucket, try to get it from project ID
-            if (!bucket || !bucket.name) {
-                const projectId = process.env.GCLOUD_PROJECT || admin.app().options.projectId;
-                if (projectId) {
-                    console.log('Attempting to use project-specific bucket:', `${projectId}.appspot.com`);
-                    bucket = storage.bucket(`${projectId}.appspot.com`);
+            bucket = await getStorageBucket();
+            console.log('Storage bucket initialized:', bucket.name);
+
+            // Verify bucket is accessible
+            try {
+                const [exists] = await bucket.exists();
+                if (!exists) {
+                    throw new Error(`Storage bucket "${bucket.name}" does not exist. Please enable Firebase Storage in Firebase Console.`);
+                }
+                console.log('Bucket verified and accessible');
+            } catch (verifyError) {
+                // If exists() fails, try to get bucket metadata instead
+                try {
+                    await bucket.getMetadata();
+                    console.log('Bucket metadata retrieved successfully');
+                } catch (metaError) {
+                    throw new Error(`Storage bucket "${bucket.name}" is not accessible. Error: ${metaError.message}. Please check Firebase Storage permissions.`);
                 }
             }
-            
-            if (!bucket || !bucket.name) {
-                throw new Error('Storage bucket is not initialized. Please check Firebase Storage configuration.');
-            }
-            
-            console.log('Storage bucket initialized:', bucket.name);
-            
-            // Verify bucket exists and is accessible
-            const [exists] = await bucket.exists();
-            if (!exists) {
-                throw new Error(`Storage bucket "${bucket.name}" does not exist. Please create it in Firebase Console.`);
-            }
-            console.log('Bucket verified and accessible');
         } catch (bucketError) {
             console.error('Error initializing storage bucket:', bucketError);
             console.error('Bucket error details:', {
                 code: bucketError.code,
                 message: bucketError.message,
-                stack: bucketError.stack
+                stack: bucketError.stack,
+                projectId: process.env.GCLOUD_PROJECT || adminApp?.options?.projectId
             });
-            throw new Error(`Failed to initialize storage bucket: ${bucketError.message}`);
+
+            // Provide helpful error message
+            let errorMessage = 'Failed to initialize storage bucket';
+            if (bucketError.code === 'ENOENT' || bucketError.message.includes('not exist')) {
+                errorMessage = 'Firebase Storage bucket does not exist. Please enable Firebase Storage in your Firebase Console.';
+            } else if (bucketError.code === 'EACCES' || bucketError.code === 'PERMISSION_DENIED') {
+                errorMessage = 'Permission denied. Please check that Firebase Storage is enabled and the service account has proper permissions.';
+            } else {
+                errorMessage = `Storage error: ${bucketError.message}`;
+            }
+
+            throw new Error(errorMessage);
         }
 
         const file = bucket.file(storageFileName);
@@ -2037,7 +2591,7 @@ app.post('/certificates/template', async (req, res) => {
                 uploaded_at: FieldValue.serverTimestamp(),
                 updated_at: FieldValue.serverTimestamp()
             };
-            
+
             await db.collection('certificate_settings').doc('template').set(templateData, { merge: true });
             console.log('Template info saved to Firestore successfully');
         } catch (firestoreError) {
@@ -2060,11 +2614,11 @@ app.post('/certificates/template', async (req, res) => {
         console.error('Error stack:', error.stack);
         console.error('Error name:', error.name);
         console.error('Error code:', error.code);
-        
+
         // More specific error messages
         let errorMessage = 'Failed to upload certificate template';
         let errorDetails = error.message;
-        
+
         if (error.code === 'ENOENT') {
             errorMessage = 'Storage path not found';
             errorDetails = 'The storage bucket or path does not exist';
@@ -2081,7 +2635,7 @@ app.post('/certificates/template', async (req, res) => {
             errorMessage = 'Firestore database error';
             errorDetails = error.message;
         }
-        
+
         res.status(500).json({
             success: false,
             error: errorMessage,
@@ -2123,26 +2677,139 @@ app.get('/certificates/template', async (req, res) => {
 /**
  * Health check
  */
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+    let storageStatus = 'unknown';
+    let storageError = null;
+
+    try {
+        const bucket = await getStorageBucket();
+        const [exists] = await bucket.exists();
+        storageStatus = exists ? 'configured' : 'not configured';
+    } catch (error) {
+        storageStatus = 'error';
+        storageError = error.message;
+    }
+
     res.json({
         status: 'OK',
         message: 'Marketing & Certificate Generator Firebase API is running',
         timestamp: new Date().toISOString(),
         services: {
             email: isEmailConfigured() ? 'configured' : 'not configured',
-            whatsapp: isWhatsAppConfigured() ? 'configured' : 'not configured'
+            whatsapp: isWhatsAppConfigured() ? 'configured' : 'not configured',
+            storage: storageStatus,
+            storageError: storageError
         }
     });
 });
 
 /**
+ * Test Storage Configuration
+ * GET /test/storage
+ */
+app.get('/test/storage', async (req, res) => {
+    try {
+        console.log('🧪 Testing Firebase Storage configuration...');
+
+        // Get bucket
+        const bucket = await getStorageBucket();
+        console.log('✅ Bucket retrieved:', bucket.name);
+
+        // Test if bucket exists
+        const [exists] = await bucket.exists();
+        if (!exists) {
+            return res.status(503).json({
+                success: false,
+                error: 'Storage bucket does not exist',
+                message: 'Please enable Firebase Storage in Firebase Console',
+                bucket: bucket.name,
+                setupUrl: `https://console.firebase.google.com/project/${process.env.GCLOUD_PROJECT || 'your-project'}/storage`
+            });
+        }
+        console.log('✅ Bucket exists and is accessible');
+
+        // Test write permission by creating a test file
+        const testFileName = `test/test-${Date.now()}.txt`;
+        const testFile = bucket.file(testFileName);
+
+        try {
+            await testFile.save('Storage test file', {
+                metadata: {
+                    contentType: 'text/plain',
+                    metadata: {
+                        purpose: 'storage_test',
+                        createdAt: new Date().toISOString()
+                    }
+                }
+            });
+            console.log('✅ Write test successful');
+
+            // Clean up test file
+            try {
+                await testFile.delete();
+                console.log('✅ Test file cleaned up');
+            } catch (deleteError) {
+                console.warn('⚠️  Could not delete test file:', deleteError.message);
+            }
+
+            // Test certificate-templates folder
+            const templatesFolder = bucket.file('certificate-templates/.test');
+            try {
+                await templatesFolder.save('test', { metadata: { contentType: 'text/plain' } });
+                await templatesFolder.delete();
+                console.log('✅ certificate-templates folder is writable');
+            } catch (folderError) {
+                console.warn('⚠️  certificate-templates folder test:', folderError.message);
+            }
+
+            res.json({
+                success: true,
+                message: 'Firebase Storage is properly configured and accessible',
+                bucket: bucket.name,
+                tests: {
+                    bucketExists: true,
+                    writePermission: true,
+                    readPermission: true
+                }
+            });
+        } catch (writeError) {
+            console.error('❌ Write test failed:', writeError);
+            res.status(503).json({
+                success: false,
+                error: 'Storage write test failed',
+                message: writeError.message,
+                bucket: bucket.name,
+                code: writeError.code,
+                details: 'Please check Firebase Storage permissions and rules'
+            });
+        }
+    } catch (error) {
+        console.error('❌ Storage test failed:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Storage configuration test failed',
+            message: error.message,
+            code: error.code,
+            setupUrl: `https://console.firebase.google.com/project/${process.env.GCLOUD_PROJECT || 'your-project'}/storage`,
+            instructions: [
+                '1. Go to Firebase Console → Storage',
+                '2. Click "Get Started" to enable Firebase Storage',
+                '3. Choose a location (e.g., us-central1)',
+                '4. Deploy storage rules: firebase deploy --only storage',
+                '5. Test again using: GET /test/storage'
+            ]
+        });
+    }
+});
+
+/**
  * Test WhatsApp message sending
  * POST /test/whatsapp
- * Body: { phone_number: "7500988212", message: "Hie" }
+ * Body: { phone_number: "7500988212", message: "Hie", media_url: "https://..." (optional) }
  */
 app.post('/test/whatsapp', async (req, res) => {
     try {
-        const { phone_number, message } = req.body;
+        const { phone_number, message, media_url, filename } = req.body;
 
         if (!phone_number) {
             return res.status(400).json({ error: 'phone_number is required' });
@@ -2160,10 +2827,17 @@ app.post('/test/whatsapp', async (req, res) => {
             });
         }
 
-        console.log(`🧪 Testing WhatsApp message to ${phone_number}: "${message}"`);
+        console.log(`🧪 Testing WhatsApp message to ${phone_number}: "${message}"${media_url ? ` with media: ${media_url}` : ''}`);
 
-        // Send test message
-        const result = await sendBulkWhatsApp(phone_number, message);
+        let result;
+        if (media_url) {
+            // Send document/media message
+            const { sendWhatsAppDocument } = require('./utils/whatsappService');
+            result = await sendWhatsAppDocument(phone_number, media_url, filename || 'document.pdf', message);
+        } else {
+            // Send text-only message
+            result = await sendBulkWhatsApp(phone_number, message);
+        }
 
         res.json({
             success: true,

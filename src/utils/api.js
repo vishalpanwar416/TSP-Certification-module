@@ -44,6 +44,10 @@ export async function apiRequest(endpoint, options = {}) {
         }
 
         // Return data directly if wrapped in success response
+        // Handle paginated responses (return data array, not the whole response object)
+        if (data.success && Array.isArray(data.data)) {
+            return data.data;
+        }
         return data.data !== undefined ? data.data : data;
     } catch (error) {
         console.error(`API Error [${endpoint}]:`, error);

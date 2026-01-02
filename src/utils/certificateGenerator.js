@@ -27,11 +27,11 @@ const CONFIG = {
         awardedTo: { x: 512, y: 300 },
         name: { x: 512, y: 360 },
         professionLabel: { x: 235, y: 550 },
-        profession: { x: 235, y: 570 },
+        profession: { x: 235, y: 540 },
         certificateNumberLabel: { x: 512, y: 550 },
-        certificateNumber: { x: 512, y: 570 },
+        certificateNumber: { x: 512, y: 540 },
         reraNumberLabel: { x: 789, y: 550 },
-        reraNumber: { x: 789, y: 570 },
+        reraNumber: { x: 789, y: 540 },
         watermark: { x: 995, y: 362 } // Vertical watermark
     }
 };
@@ -57,58 +57,27 @@ export const generateCertificateDataUrl = async (data, templateUrl = null) => {
             ctx.drawImage(img, 0, 0, CONFIG.canvasWidth, CONFIG.canvasHeight);
 
             // Draw Recipient Name (large, bold, italicized red script font)
-            // Note: "IS AWARDED TO:" is already on the template image
+            // Note: "IS AWARDED TO:" and underline are already on the template image
             ctx.font = CONFIG.fonts.name;
             ctx.fillStyle = CONFIG.colors.name;
             ctx.textAlign = 'center';
             const recipientName = data.name || data.recipient_name || 'Recipient Name';
             ctx.fillText(recipientName, CONFIG.positions.name.x, CONFIG.positions.name.y);
 
-            // Draw underline under the name (matching the design)
-            const textWidth = ctx.measureText(recipientName).width;
-            const underlineY = CONFIG.positions.name.y + 20; // Space below name for underline
-            ctx.beginPath();
-            ctx.moveTo(CONFIG.positions.name.x - Math.max(200, textWidth / 2 + 20), underlineY);
-            ctx.lineTo(CONFIG.positions.name.x + Math.max(200, textWidth / 2 + 20), underlineY);
-            ctx.strokeStyle = '#333';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            // Draw Labels and Values
+            // Draw Values Only (labels are already on the template)
             ctx.textAlign = 'center';
-            
-            // AWARDE PROFESSION Label and Value
-            ctx.font = CONFIG.fonts.label;
-            ctx.fillStyle = CONFIG.colors.label;
-            ctx.fillText('AWARDE PROFESSION', CONFIG.positions.professionLabel.x, CONFIG.positions.professionLabel.y);
             ctx.font = CONFIG.fonts.value;
             ctx.fillStyle = CONFIG.colors.value;
+            
+            // AWARDE PROFESSION Value
             ctx.fillText((data.professional || data.Professional || 'RERA CONSULTANT').toUpperCase(), CONFIG.positions.profession.x, CONFIG.positions.profession.y);
 
-            // CERTIFICATE NUMBER Label and Value
-            ctx.font = CONFIG.fonts.label;
-            ctx.fillStyle = CONFIG.colors.label;
-            ctx.fillText('CERTIFICATE NUMBER', CONFIG.positions.certificateNumberLabel.x, CONFIG.positions.certificateNumberLabel.y);
-            ctx.font = CONFIG.fonts.value;
-            ctx.fillStyle = CONFIG.colors.value;
+            // CERTIFICATE NUMBER Value
             ctx.fillText((data.certificate_number || data.certificateNumber || '-').toUpperCase(), CONFIG.positions.certificateNumber.x, CONFIG.positions.certificateNumber.y);
 
-            // AWARDE RERA NUMBER Label and Value
-            ctx.font = CONFIG.fonts.label;
-            ctx.fillStyle = CONFIG.colors.label;
-            ctx.fillText('AWARDE RERA NUMBER', CONFIG.positions.reraNumberLabel.x, CONFIG.positions.reraNumberLabel.y);
-            ctx.font = CONFIG.fonts.value;
-            ctx.fillStyle = CONFIG.colors.value;
+            // AWARDE RERA NUMBER Value
+            // Note: RERA number vertical watermark is already on the template image
             ctx.fillText((data.award_rera_number || data.rera_awarde_no || data.reraAwardeNo || '-').toUpperCase(), CONFIG.positions.reraNumber.x, CONFIG.positions.reraNumber.y);
-
-            // Vertical Watermark on the right edge
-            ctx.save();
-            ctx.translate(CONFIG.positions.watermark.x, CONFIG.positions.watermark.y);
-            ctx.rotate(Math.PI / 2);
-            ctx.font = '700 10px "Montserrat", sans-serif';
-            ctx.fillStyle = '#333';
-            ctx.fillText(`RERA NO: ${data.award_rera_number || data.rera_awarde_no || data.reraAwardeNo || 'PRM/KA/RERA/1251/309/AG/250318/006037'}`, 0, 0);
-            ctx.restore();
 
             resolve(canvas.toDataURL('image/png'));
         };

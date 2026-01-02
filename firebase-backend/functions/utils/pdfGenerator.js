@@ -49,8 +49,6 @@ const getCertificateHTML = (data, imageDataUrl) => {
       text-align: center;
       width: 80%;
       white-space: nowrap;
-      padding-bottom: 5px;
-      border-bottom: 2px solid #333; /* Single underline - template already has "IS AWARDED TO:" */
       display: inline-block;
       width: auto;
       min-width: 400px;
@@ -58,7 +56,7 @@ const getCertificateHTML = (data, imageDataUrl) => {
 
     .info-container {
       position: absolute;
-      bottom: 195px;
+      bottom: 225px;
       left: 0;
       width: 100%;
       display: flex;
@@ -125,21 +123,14 @@ const getCertificateHTML = (data, imageDataUrl) => {
     
     <div class="info-container">
       <div class="info-box">
-        <div class="info-label">AWARDE PROFESSION</div>
         <div class="info-value">${data.professional || data.Professional || 'RERA CONSULTANT'}</div>
       </div>
       <div class="info-box">
-        <div class="info-label">CERTIFICATE NUMBER</div>
         <div class="info-value">${data.certificate_number || data.certificateNumber || '-'}</div>
       </div>
       <div class="info-box">
-        <div class="info-label">AWARDE RERA NUMBER</div>
         <div class="info-value">${data.award_rera_number || data.reraAwardeNo || '-'}</div>
       </div>
-    </div>
-
-    <div class="watermark-vertical">
-      RERA NO. ${data.award_rera_number || data.reraAwardeNo || 'PRM/KA/RERA/1251/309/AG/250318/006037'}
     </div>
   </div>
 </body>
@@ -161,39 +152,28 @@ const generateCertificatePDF = async (certificateData, templateUrl = null) => {
     // If template URL is provided, use it
     if (templateUrl) {
       try {
-        // Fetch the image from URL and convert to base64
-        const https = require('https');
-        const http = require('http');
-        const url = require('url');
-        
-        const fetchImage = () => {
-          return new Promise((resolve, reject) => {
-            const parsedUrl = url.parse(templateUrl);
-            const client = parsedUrl.protocol === 'https:' ? https : http;
-            
-            client.get(templateUrl, (response) => {
-              if (response.statusCode !== 200) {
-                reject(new Error(`Failed to fetch image: ${response.statusCode}`));
-                return;
-              }
-              
-              const chunks = [];
-              response.on('data', (chunk) => chunks.push(chunk));
-              response.on('end', () => {
-                const buffer = Buffer.concat(chunks);
-                const base64 = buffer.toString('base64');
-                const contentType = response.headers['content-type'] || 'image/jpeg';
-                resolve(`data:${contentType};base64,${base64}`);
-              });
-            }).on('error', reject);
-          });
-        };
-        
-        imageDataUrl = await fetchImage();
-        console.log('✅ Using uploaded certificate template');
+        const fetch = require('node-fetch');
+
+        // Handle emulator URLs if running locally
+        let actualUrl = templateUrl;
+        if (process.env.FUNCTIONS_EMULATOR && templateUrl.includes('storage.googleapis.com')) {
+          // If we are in emulator, the hardcoded storage.googleapis.com URL won't work
+          // But since we are inside the function, we might be able to use the local emulator port
+          // For now, let's just try to fetch it as is, but if it fails, we know why.
+        }
+
+        const response = await fetch(templateUrl);
+        if (response.ok) {
+          const buffer = await response.buffer();
+          const base64 = buffer.toString('base64');
+          const contentType = response.headers.get('content-type') || 'image/jpeg';
+          imageDataUrl = `data:${contentType};base64,${base64}`;
+          console.log('✅ Successfully loaded customized certificate template');
+        } else {
+          throw new Error(`Failed to fetch template: ${response.statusText}`);
+        }
       } catch (err) {
         console.warn('⚠️ Failed to load template from URL, falling back to default:', err.message);
-        // Fallback to default
         imageDataUrl = '';
       }
     }
@@ -214,10 +194,17 @@ const generateCertificatePDF = async (certificateData, templateUrl = null) => {
       }
     }
 
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+    const launchOptions = {
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    };
+
+    // On local Mac, if bundled browser fails, try system Chrome
+    if (process.platform === 'darwin' && fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) {
+      launchOptions.executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    }
+
+    browser = await puppeteer.launch(launchOptions);
 
     const page = await browser.newPage();
     const html = getCertificateHTML(certificateData, imageDataUrl);
@@ -251,4 +238,88 @@ const generateCertificatePDF = async (certificateData, templateUrl = null) => {
   }
 };
 
-module.exports = { generateCertificatePDF };
+/**
+ * Generate image certificate (JPG) and return as Buffer
+ * @param {Object} certificateData - Certificate data
+ * @param {string} templateUrl - Optional template image URL
+ */
+const generateCertificateImage = async (certificateData, templateUrl = null) => {
+  let browser;
+
+  try {
+    let imageDataUrl = '';
+
+    // If template URL is provided, use it
+    if (templateUrl) {
+      try {
+        const fetch = require('node-fetch');
+        const response = await fetch(templateUrl);
+
+        if (response.ok) {
+          const buffer = await response.buffer();
+          const base64 = buffer.toString('base64');
+          const contentType = response.headers.get('content-type') || 'image/jpeg';
+          imageDataUrl = `data:${contentType};base64,${base64}`;
+          console.log('✅ Successfully loaded customized certificate template for image');
+        } else {
+          throw new Error(`Failed to fetch template: ${response.statusText}`);
+        }
+      } catch (err) {
+        console.warn('⚠️ Failed to load template from URL, falling back to default:', err.message);
+      }
+    }
+
+    // Fallback to default image
+    if (!imageDataUrl) {
+      const imagePath = path.join(__dirname, '..', 'assets', 'Certificate.jpg');
+      if (fs.existsSync(imagePath)) {
+        const imageBase64 = fs.readFileSync(imagePath).toString('base64');
+        imageDataUrl = `data:image/jpeg;base64,${imageBase64}`;
+      }
+    }
+
+    const launchOptions = {
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    };
+
+    if (process.platform === 'darwin' && fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) {
+      launchOptions.executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    }
+
+    browser = await puppeteer.launch(launchOptions);
+
+    const page = await browser.newPage();
+    const html = getCertificateHTML(certificateData, imageDataUrl);
+
+    await page.setContent(html, {
+      waitUntil: ['networkidle0', 'domcontentloaded', 'load'],
+      timeout: 30000
+    });
+
+    await page.setViewport({
+      width: 1024,
+      height: 724,
+      deviceScaleFactor: 2,
+    });
+
+    const imageBuffer = await page.screenshot({
+      type: 'jpeg',
+      quality: 90,
+      fullPage: true
+    });
+
+    console.log(`✅ Certificate Image generated for: ${certificateData.recipient_name}`);
+
+    return imageBuffer;
+  } catch (error) {
+    console.error('Error generating image:', error);
+    throw error;
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+};
+
+module.exports = { generateCertificatePDF, generateCertificateImage };
