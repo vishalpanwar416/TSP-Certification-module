@@ -1687,6 +1687,14 @@ app.post('/marketing/campaigns', async (req, res) => {
     try {
         const { type, subject, message, contactIds, templateId, scheduledAt, includeCertificate, whatsappCampaign } = req.body;
 
+        // Log the received message for debugging
+        console.log('📥 Received campaign creation request:');
+        console.log('   Type:', type);
+        console.log('   Message length:', message?.length || 0);
+        console.log('   Message has newlines:', message?.includes('\n') || false);
+        console.log('   Message preview (first 100 chars):', message?.substring(0, 100) || '');
+        console.log('   Full message:', JSON.stringify(message));
+
         if (!type || !['email', 'whatsapp'].includes(type)) {
             return res.status(400).json({ error: 'Valid type (email or whatsapp) is required' });
         }
@@ -1737,11 +1745,18 @@ app.post('/marketing/campaigns', async (req, res) => {
             }
         }
 
+        // Log message before storing to verify it's complete
+        console.log('💾 Storing campaign message:');
+        console.log('   Message length:', message?.length || 0);
+        console.log('   Message has newlines:', message?.includes('\n') || false);
+        console.log('   Message (first 200 chars):', message?.substring(0, 200) || '');
+        console.log('   Full message:', JSON.stringify(message));
+
         const campaignData = {
             id,
             type,
             subject: subject || null,
-            message,
+            message, // Store message as-is
             template_id: templateId || null,
             contact_ids: contactIds,
             recipient_count: contacts.length,
@@ -1757,6 +1772,14 @@ app.post('/marketing/campaigns', async (req, res) => {
         };
 
         await db.collection('marketing_campaigns').doc(id).set(campaignData);
+        
+        // Verify message was stored correctly
+        const verifyDoc = await db.collection('marketing_campaigns').doc(id).get();
+        const storedMessage = verifyDoc.data()?.message || '';
+        console.log('✅ Verified stored message:');
+        console.log('   Stored message length:', storedMessage?.length || 0);
+        console.log('   Stored message has newlines:', storedMessage?.includes('\n') || false);
+        console.log('   Stored message:', JSON.stringify(storedMessage));
 
         // If not scheduled, send immediately
         if (!isScheduled) {
@@ -1800,19 +1823,52 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
 
     for (const contact of contacts) {
         try {
+            // Log original message before personalization for debugging
+            if (contacts.indexOf(contact) === 0) { // Log only for first contact to avoid spam
+                console.log(`📝 Processing message for campaign ${campaignId}:`);
+                console.log(`   Original message length: ${message?.length || 0}`);
+                console.log(`   Original message has newlines: ${message?.includes('\n') || false}`);
+                console.log(`   Original message: ${JSON.stringify(message)}`);
+            }
+
             // Personalize message with all supported placeholders
+            // CRITICAL: Use a function that preserves the entire message structure
             const personalizeMessage = (text, contact) => {
-                if (!text) return '';
-                return text
+                if (!text || typeof text !== 'string') return '';
+                
+                // Store original length for verification
+                const originalLength = text.length;
+                const originalHasNewlines = text.includes('\n');
+                
+                // Replace placeholders one by one, preserving all other content
+                let result = text
                     .replace(/\{\{name\}\}/gi, contact.name || 'Valued Customer')
                     .replace(/\{\{certificate\}\}/gi, contact.certificate_number || contact.certificateNumber || '')
                     .replace(/\{\{rera\}\}/gi, contact.rera_awarde_no || contact.reraAwardeNo || '')
                     .replace(/\{\{professional\}\}/gi, contact.professional || '')
                     .replace(/\{\{email\}\}/gi, contact.email || '')
                     .replace(/\{\{phone\}\}/gi, contact.phone || '');
+                
+                // Verify the result preserves structure (should have same or more characters, same newlines)
+                const resultHasNewlines = result.includes('\n');
+                if (originalHasNewlines && !resultHasNewlines) {
+                    console.error(`⚠️ WARNING: Newlines lost during personalization!`);
+                    console.error(`   Original: ${JSON.stringify(text)}`);
+                    console.error(`   Result: ${JSON.stringify(result)}`);
+                }
+                
+                return result;
             };
 
             const personalizedMessage = personalizeMessage(message, contact);
+            
+            // Log personalized message for first contact
+            if (contacts.indexOf(contact) === 0) {
+                console.log(`   Personalized message length: ${personalizedMessage?.length || 0}`);
+                console.log(`   Personalized message has newlines: ${personalizedMessage?.includes('\n') || false}`);
+                console.log(`   Personalized message: ${JSON.stringify(personalizedMessage)}`);
+                console.log(`   Personalized message (raw):`, personalizedMessage);
+            }
 
             if (type === 'email' && contact.email) {
                 try {
@@ -1908,14 +1964,25 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                         }
                     }
 
-                    console.log(`📤 Sending WhatsApp to ${contact.phone}${finalMediaUrl ? ` with media: ${finalMediaUrl}` : ' (text only)'}`);
+                    // Log the personalized message before sending to verify it's complete
+                    if (contacts.indexOf(contact) === 0) {
+                        console.log(`📤 Sending WhatsApp to ${contact.phone}${finalMediaUrl ? ` with media: ${finalMediaUrl}` : ' (text only)'}`);
+                        console.log(`   Personalized message length: ${personalizedMessage?.length || 0}`);
+                        console.log(`   Personalized message has newlines: ${personalizedMessage?.includes('\n') || false}`);
+                        console.log(`   Personalized message: ${JSON.stringify(personalizedMessage)}`);
+                        console.log(`   Personalized message (raw):`, personalizedMessage);
+                    }
+
                     console.log(`📋 Media URL type: ${typeof finalMediaUrl}, value: ${finalMediaUrl}`);
 
                     // Double-check that finalMediaUrl is never undefined before passing
                     const safeMediaUrl = (finalMediaUrl !== undefined && finalMediaUrl !== null) ? finalMediaUrl : null;
                     const safeFilename = (finalFilename !== undefined && finalFilename !== null) ? finalFilename : 'certificate.pdf';
 
-                    const result = await sendBulkWhatsApp(contact.phone, personalizedMessage, safeMediaUrl, safeFilename, whatsappCampaign);
+                    // CRITICAL: Ensure personalizedMessage is a string and preserve all content
+                    const messageToSend = typeof personalizedMessage === 'string' ? personalizedMessage : String(personalizedMessage || '');
+
+                    const result = await sendBulkWhatsApp(contact.phone, messageToSend, safeMediaUrl, safeFilename, whatsappCampaign);
 
                     // Verify the message was actually sent
                     if (result && result.success !== false) {

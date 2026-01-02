@@ -146,6 +146,13 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
     const formattedNumber = formatPhoneNumber(recipientNumber);
     console.log(`📤 Sending AiSensy message to ${formattedNumber} (Campaign: ${campaign})`);
 
+    // Log the incoming message to verify it's complete
+    console.log(`📥 WhatsApp Service received message:`);
+    console.log(`   Type: ${typeof message}`);
+    console.log(`   Length: ${message?.length || 0}`);
+    console.log(`   Has newlines: ${message?.includes('\n') || false}`);
+    console.log(`   Message: ${JSON.stringify(message)}`);
+
     // Process message: if it's a string, ensure it's not empty after trimming
     // If media is provided, allow empty message (caption is optional)
     let processedMessage = message;
@@ -160,6 +167,17 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
         // Keep the original message completely intact - don't trim anything
         // This ensures newlines after {{name}} and all content is preserved
         processedMessage = message; // Use original message, never trimmed
+        
+        // Verify message wasn't accidentally modified
+        if (processedMessage.length !== message.length) {
+            console.error(`⚠️ ERROR: Message length changed during processing!`);
+            console.error(`   Original length: ${message.length}`);
+            console.error(`   Processed length: ${processedMessage.length}`);
+            processedMessage = message; // Restore original
+        }
+    } else if (message !== null && message !== undefined) {
+        // Convert to string if not already
+        processedMessage = String(message);
     }
 
     // For AiSensy, handle message formatting
@@ -219,7 +237,30 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
     console.log('📝 Template params:', JSON.stringify(templateParams));
     console.log('📝 Message length:', processedMessage?.length || 0);
     console.log('📝 Has newlines:', processedMessage?.includes('\n') || false);
-    console.log('📝 Message preview:', processedMessage?.substring(0, 100) || '');
+    console.log('📝 Message preview (first 200 chars):', processedMessage?.substring(0, 200) || '');
+    console.log('📝 Message preview (last 100 chars):', processedMessage?.substring(Math.max(0, processedMessage.length - 100)) || '');
+    console.log('📝 Full message (raw):', processedMessage);
+    
+    // Verify templateParams contains the complete message
+    if (Array.isArray(templateParams) && templateParams.length > 0) {
+        const firstParam = templateParams[0];
+        console.log('📝 First template param length:', firstParam?.length || 0);
+        console.log('📝 First template param has newlines:', firstParam?.includes('\n') || false);
+        console.log('📝 First template param:', JSON.stringify(firstParam));
+        
+        // CRITICAL: Verify the message wasn't truncated
+        if (typeof processedMessage === 'string' && typeof firstParam === 'string') {
+            if (firstParam.length < processedMessage.length) {
+                console.error(`⚠️ ERROR: Template param is shorter than processed message!`);
+                console.error(`   Processed message length: ${processedMessage.length}`);
+                console.error(`   Template param length: ${firstParam.length}`);
+                // Fix it by using the full processed message
+                templateParams[0] = processedMessage;
+                payload.templateParams = templateParams;
+                console.log('✅ Fixed: Updated templateParams with full message');
+            }
+        }
+    }
 
     // Final validation before sending - ensure finalMediaUrl is never undefined
     if (typeof finalMediaUrl === 'undefined') {
@@ -446,6 +487,13 @@ const sendBulkWhatsApp = async (recipientNumber, message, mediaUrl = null, filen
     if (!isWhatsAppConfigured()) {
         throw new Error('WhatsApp is not configured.');
     }
+
+    // Log message before processing to verify it's complete
+    console.log(`📨 sendBulkWhatsApp received message:`);
+    console.log(`   Type: ${typeof message}`);
+    console.log(`   Length: ${message?.length || 0}`);
+    console.log(`   Has newlines: ${message?.includes('\n') || false}`);
+    console.log(`   Message: ${JSON.stringify(message)}`);
 
     const activeAPI = getActiveAPI();
 

@@ -332,8 +332,13 @@ function ContactUploadModal({ onClose, onUpload }) {
 
 // Campaign Compose Modal
 function ComposeModal({ type, contacts, certificates = [], templates = [], onClose, onSend }) {
+    // Channel selection - if type is null/undefined, default both to true for unified campaign
+    const [sendViaEmail, setSendViaEmail] = useState(type === null || type === undefined ? true : type === 'email');
+    const [sendViaWhatsApp, setSendViaWhatsApp] = useState(type === null || type === undefined ? true : type === 'whatsapp');
+    
     const [subject, setSubject] = useState('');
-    const [message, setMessage] = useState('');
+    const [emailMessage, setEmailMessage] = useState('');
+    const [whatsappMessage, setWhatsappMessage] = useState('');
     const [selectedContacts, setSelectedContacts] = useState([]);
     const [selectAll, setSelectAll] = useState(false);
     const [sending, setSending] = useState(false);
@@ -384,11 +389,19 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
             alert('Please select at least one contact');
             return;
         }
-        if (!message.trim()) {
-            alert('Please enter a message');
+        if (!sendViaEmail && !sendViaWhatsApp) {
+            alert('Please select at least one channel (Email or WhatsApp)');
             return;
         }
-        if (type === 'email' && !subject.trim()) {
+        if (sendViaEmail && !emailMessage.trim()) {
+            alert('Please enter an email message');
+            return;
+        }
+        if (sendViaWhatsApp && !whatsappMessage.trim()) {
+            alert('Please enter a WhatsApp message');
+            return;
+        }
+        if (sendViaEmail && !subject.trim()) {
             alert('Please enter a subject for email');
             return;
         }
@@ -414,11 +427,28 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
 
         setSending(true);
         try {
+            // Log messages before sending for debugging
+            console.log('📤 Frontend: Sending messages:');
+            if (sendViaEmail) {
+                console.log('   Email message length:', emailMessage?.length || 0);
+                console.log('   Email message has newlines:', emailMessage?.includes('\n') || false);
+                console.log('   Email message (first 200 chars):', emailMessage?.substring(0, 200) || '');
+            }
+            if (sendViaWhatsApp) {
+                console.log('   WhatsApp message length:', whatsappMessage?.length || 0);
+                console.log('   WhatsApp message has newlines:', whatsappMessage?.includes('\n') || false);
+                console.log('   WhatsApp message (first 200 chars):', whatsappMessage?.substring(0, 200) || '');
+            }
+            console.log('   Channels: Email=' + sendViaEmail + ', WhatsApp=' + sendViaWhatsApp);
+
             const scheduledAt = scheduleEnabled ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString() : null;
             await onSend({
-                type,
+                sendViaEmail,
+                sendViaWhatsApp,
+                type: type || (sendViaEmail && sendViaWhatsApp ? 'both' : (sendViaEmail ? 'email' : 'whatsapp')),
                 subject,
-                message,
+                emailMessage: sendViaEmail ? emailMessage : null,
+                whatsappMessage: sendViaWhatsApp ? whatsappMessage : null,
                 contactIds: selectedContacts,
                 includeCertificate: includeCertificate && selectedCertificate ? {
                     certificateId: selectedCertificate,
@@ -438,7 +468,9 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
         }
     };
 
-    const isEmail = type === 'email';
+    const isEmail = type === 'email' || (type === null && sendViaEmail && !sendViaWhatsApp);
+    const isWhatsApp = type === 'whatsapp' || (type === null && sendViaWhatsApp && !sendViaEmail);
+    const isBoth = (type === null || type === undefined) && sendViaEmail && sendViaWhatsApp;
 
     return (
         <div className="modal-overlay" onClick={onClose}>
@@ -446,10 +478,31 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                 <div className="modal-header">
                     <div>
                         <h2 className="modal-title">
-                            {isEmail ? <Mail size={24} /> : <MessageCircle size={24} />}
-                            {isEmail ? 'Compose Email' : 'Compose WhatsApp Message'}
+                            {isBoth ? (
+                                <>
+                                    <Mail size={24} style={{ marginRight: '8px' }} />
+                                    <MessageCircle size={24} style={{ marginRight: '8px' }} />
+                                    New Campaign
+                                </>
+                            ) : isEmail ? (
+                                <>
+                                    <Mail size={24} />
+                                    Compose Email
+                                </>
+                            ) : (
+                                <>
+                                    <MessageCircle size={24} />
+                                    Compose WhatsApp Message
+                                </>
+                            )}
                         </h2>
-                        <p className="modal-subtitle">Send bulk {isEmail ? 'emails' : 'WhatsApp messages'} to your contacts</p>
+                        <p className="modal-subtitle">
+                            {isBoth 
+                                ? 'Send bulk emails and WhatsApp messages to your contacts' 
+                                : isEmail 
+                                    ? 'Send bulk emails to your contacts' 
+                                    : 'Send bulk WhatsApp messages to your contacts'}
+                        </p>
                     </div>
                     <button className="modal-close" onClick={onClose}>
                         <X size={24} />
@@ -496,7 +549,11 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                                     <div className="recipient-details">
                                         <span className="recipient-name">{contact.name || 'Unknown'}</span>
                                         <span className="recipient-contact">
-                                            {isEmail ? contact.email : contact.phone}
+                                            {isBoth 
+                                                ? `${contact.email || 'No email'} | ${contact.phone || 'No phone'}` 
+                                                : isEmail 
+                                                    ? contact.email 
+                                                    : contact.phone}
                                         </span>
                                     </div>
                                 </div>
@@ -505,6 +562,45 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                     </div>
                     <div className="compose-right">
                         <h4>Message</h4>
+
+                        {/* Channel Selection - Only show when type is null/undefined (unified campaign) */}
+                        {(type === null || type === undefined) && (
+                            <div className="form-group" style={{ marginBottom: '1.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
+                                <label style={{ display: 'block', marginBottom: '0.75rem', fontWeight: '500', fontSize: '0.875rem' }}>
+                                    Select Channels
+                                </label>
+                                <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={sendViaEmail}
+                                            onChange={(e) => {
+                                                setSendViaEmail(e.target.checked);
+                                                if (!e.target.checked && !sendViaWhatsApp) {
+                                                    setSendViaWhatsApp(true);
+                                                }
+                                            }}
+                                        />
+                                        <Mail size={18} />
+                                        <span>Email</span>
+                                    </label>
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={sendViaWhatsApp}
+                                            onChange={(e) => {
+                                                setSendViaWhatsApp(e.target.checked);
+                                                if (!e.target.checked && !sendViaEmail) {
+                                                    setSendViaEmail(true);
+                                                }
+                                            }}
+                                        />
+                                        <MessageCircle size={18} />
+                                        <span>WhatsApp</span>
+                                    </label>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Template Selector Dropdown */}
                         <div className="form-group template-selector">
@@ -517,9 +613,13 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                                 onChange={(e) => {
                                     const selectedTemplate = (templates || []).find(t => t.id === e.target.value);
                                     if (selectedTemplate) {
-                                        setMessage(selectedTemplate.content || '');
-                                        if (selectedTemplate.subject && isEmail) {
-                                            setSubject(selectedTemplate.subject);
+                                        if (selectedTemplate.type === 'email') {
+                                            setEmailMessage(selectedTemplate.content || '');
+                                            if (selectedTemplate.subject) {
+                                                setSubject(selectedTemplate.subject);
+                                            }
+                                        } else if (selectedTemplate.type === 'whatsapp') {
+                                            setWhatsappMessage(selectedTemplate.content || '');
                                         }
                                     }
                                 }}
@@ -527,19 +627,25 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                             >
                                 <option value="">-- Select a template (optional) --</option>
                                 {(templates || [])
-                                    .filter(t => t.type === type)
+                                    .filter(t => {
+                                        if (type === null || type === undefined) {
+                                            // For unified campaigns, show both email and whatsapp templates
+                                            return t.type === 'email' || t.type === 'whatsapp';
+                                        }
+                                        return t.type === type;
+                                    })
                                     .map(template => (
                                         <option key={template.id} value={template.id}>
-                                            {template.name}
+                                            {template.name} ({template.type})
                                         </option>
                                     ))
                                 }
                             </select>
                         </div>
 
-                        {isEmail && (
+                        {(sendViaEmail || isEmail) && (
                             <div className="form-group">
-                                <label>Subject</label>
+                                <label>Email Subject</label>
                                 <input
                                     type="text"
                                     className="form-input"
@@ -549,7 +655,7 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                                 />
                             </div>
                         )}
-                        {!isEmail && (
+                        {(sendViaWhatsApp || isWhatsApp) && (
                             <div className="form-group">
                                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                     <span>WhatsApp Campaign Name</span>
@@ -564,20 +670,68 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                                 />
                             </div>
                         )}
-                        <div className="form-group">
-                            <label>Message Body</label>
-                            <textarea
-                                className="form-textarea"
-                                placeholder={`Type your ${isEmail ? 'email' : 'WhatsApp'} message here...`}
-                                value={message}
-                                onChange={(e) => setMessage(e.target.value)}
-                                rows={isEmail ? 12 : 8}
-                            />
-                        </div>
-                        <div className="personalization-hint">
-                            <Zap size={16} />
-                            <span>Use <code>{'{{name}}'}</code> to personalize with recipient's name</span>
-                        </div>
+                        
+                        {/* Email Message Body */}
+                        {(sendViaEmail || isEmail) && (
+                            <div className="form-group">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <Mail size={16} />
+                                    Email Message Body
+                                </label>
+                                <textarea
+                                    className="form-textarea"
+                                    placeholder="Type your email message here..."
+                                    value={emailMessage}
+                                    onChange={(e) => {
+                                        const newValue = e.target.value;
+                                        // Debug: Log when message changes to verify newlines are captured
+                                        if (newValue.includes('\n')) {
+                                            console.log('📝 Email Textarea: Message contains newline');
+                                            console.log('   Length:', newValue.length);
+                                            console.log('   Newline positions:', [...newValue.matchAll(/\n/g)].map(m => m.index));
+                                            console.log('   Full value:', JSON.stringify(newValue));
+                                        }
+                                        setEmailMessage(newValue);
+                                    }}
+                                    rows={12}
+                                />
+                                <div className="personalization-hint" style={{ marginTop: '0.5rem' }}>
+                                    <Zap size={16} />
+                                    <span>Use <code>{'{{name}}'}</code> to personalize with recipient's name</span>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* WhatsApp Message Body */}
+                        {(sendViaWhatsApp || isWhatsApp) && (
+                            <div className="form-group">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <MessageCircle size={16} />
+                                    WhatsApp Message Body
+                                </label>
+                                <textarea
+                                    className="form-textarea"
+                                    placeholder="Type your WhatsApp message here..."
+                                    value={whatsappMessage}
+                                    onChange={(e) => {
+                                        const newValue = e.target.value;
+                                        // Debug: Log when message changes to verify newlines are captured
+                                        if (newValue.includes('\n')) {
+                                            console.log('📝 WhatsApp Textarea: Message contains newline');
+                                            console.log('   Length:', newValue.length);
+                                            console.log('   Newline positions:', [...newValue.matchAll(/\n/g)].map(m => m.index));
+                                            console.log('   Full value:', JSON.stringify(newValue));
+                                        }
+                                        setWhatsappMessage(newValue);
+                                    }}
+                                    rows={8}
+                                />
+                                <div className="personalization-hint" style={{ marginTop: '0.5rem' }}>
+                                    <Zap size={16} />
+                                    <span>Use <code>{'{{name}}'}</code> to personalize with recipient's name</span>
+                                </div>
+                            </div>
+                        )}
 
                         {/* Certificate Attachment Section */}
                         <div className="form-group" style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
@@ -997,19 +1151,57 @@ function MarketingDashboard() {
         try {
             setLoading(true);
 
-            // Use messaging service to create and send campaign
-            const result = await messagingService.createAndSendCampaign(
-                {
-                    type: data.type,
-                    subject: data.subject,
-                    message: data.message,
-                    contactIds: data.contactIds,
-                    includeCertificate: data.includeCertificate,
-                    scheduledAt: data.scheduledAt || null,
-                    whatsappCampaign: data.whatsappCampaign || null
-                },
-                contacts
-            );
+            // Check if both channels are selected
+            const sendBoth = data.sendViaEmail && data.sendViaWhatsApp;
+            
+            let results = [];
+            
+            if (sendBoth) {
+                // Create campaigns for both email and WhatsApp
+                const emailCampaign = messagingService.createAndSendCampaign(
+                    {
+                        type: 'email',
+                        subject: data.subject,
+                        message: data.emailMessage,
+                        contactIds: data.contactIds,
+                        includeCertificate: data.includeCertificate,
+                        scheduledAt: data.scheduledAt || null,
+                        whatsappCampaign: null
+                    },
+                    contacts
+                );
+                
+                const whatsappCampaign = messagingService.createAndSendCampaign(
+                    {
+                        type: 'whatsapp',
+                        subject: null,
+                        message: data.whatsappMessage,
+                        contactIds: data.contactIds,
+                        includeCertificate: data.includeCertificate,
+                        scheduledAt: data.scheduledAt || null,
+                        whatsappCampaign: data.whatsappCampaign || null
+                    },
+                    contacts
+                );
+                
+                // Execute both campaigns in parallel
+                results = await Promise.allSettled([emailCampaign, whatsappCampaign]);
+            } else {
+                // Single channel campaign
+                const result = await messagingService.createAndSendCampaign(
+                    {
+                        type: data.sendViaEmail ? 'email' : 'whatsapp',
+                        subject: data.subject,
+                        message: data.sendViaEmail ? data.emailMessage : data.whatsappMessage,
+                        contactIds: data.contactIds,
+                        includeCertificate: data.includeCertificate,
+                        scheduledAt: data.scheduledAt || null,
+                        whatsappCampaign: data.whatsappCampaign || null
+                    },
+                    contacts
+                );
+                results = [{ status: 'fulfilled', value: result }];
+            }
 
             // Reload data from Firebase
             const [updatedContacts, updatedCampaigns] = await Promise.all([
@@ -1021,17 +1213,43 @@ function MarketingDashboard() {
             setCampaigns(updatedCampaigns);
             updateStats(updatedContacts, updatedCampaigns);
 
-            const sent = result.sent_count ?? result.sentCount ?? result.sent ?? 0;
-            const failed = result.failed_count ?? result.failedCount ?? result.failed ?? 0;
-            const total = result.recipient_count ?? result.recipientCount ?? result.total ?? data.contactIds.length;
-            const status = result.status || (failed > 0 ? (sent > 0 ? 'partial' : 'failed') : 'completed');
-
-            if (failed > 0) {
-                const errors = result.errors && Array.isArray(result.errors) ? result.errors : [];
-                const firstError = errors.length ? ` First error: ${errors[0].error || ''}` : '';
-                alert(`⚠️ Campaign status: ${status}. Sent ${sent}/${total}. Failed ${failed}.${firstError}`);
+            // Process results and show appropriate message
+            if (sendBoth) {
+                const emailResult = results[0].status === 'fulfilled' ? results[0].value : null;
+                const whatsappResult = results[1].status === 'fulfilled' ? results[1].value : null;
+                
+                const emailSent = emailResult?.sent_count ?? emailResult?.sentCount ?? emailResult?.sent ?? 0;
+                const emailFailed = emailResult?.failed_count ?? emailResult?.failedCount ?? emailResult?.failed ?? 0;
+                const whatsappSent = whatsappResult?.sent_count ?? whatsappResult?.sentCount ?? whatsappResult?.sent ?? 0;
+                const whatsappFailed = whatsappResult?.failed_count ?? whatsappResult?.failedCount ?? whatsappResult?.failed ?? 0;
+                
+                const totalSent = emailSent + whatsappSent;
+                const totalFailed = emailFailed + whatsappFailed;
+                const total = data.contactIds.length * 2; // Both channels
+                
+                if (results[0].status === 'rejected' || results[1].status === 'rejected') {
+                    const emailError = results[0].status === 'rejected' ? results[0].reason?.message : '';
+                    const whatsappError = results[1].status === 'rejected' ? results[1].reason?.message : '';
+                    alert(`⚠️ Campaign status: Partial. Email: ${emailSent}/${data.contactIds.length} sent, ${emailFailed} failed. WhatsApp: ${whatsappSent}/${data.contactIds.length} sent, ${whatsappFailed} failed.${emailError ? ' Email error: ' + emailError : ''}${whatsappError ? ' WhatsApp error: ' + whatsappError : ''}`);
+                } else if (totalFailed > 0) {
+                    alert(`⚠️ Campaign status: Partial. Email: ${emailSent}/${data.contactIds.length} sent, ${emailFailed} failed. WhatsApp: ${whatsappSent}/${data.contactIds.length} sent, ${whatsappFailed} failed.`);
+                } else {
+                    alert(`✅ Campaign completed. Email: ${emailSent}/${data.contactIds.length} sent. WhatsApp: ${whatsappSent}/${data.contactIds.length} sent.`);
+                }
             } else {
-                alert(`✅ Campaign ${status}. Sent ${sent}/${total} messages.`);
+                const result = results[0].value;
+                const sent = result.sent_count ?? result.sentCount ?? result.sent ?? 0;
+                const failed = result.failed_count ?? result.failedCount ?? result.failed ?? 0;
+                const total = result.recipient_count ?? result.recipientCount ?? result.total ?? data.contactIds.length;
+                const status = result.status || (failed > 0 ? (sent > 0 ? 'partial' : 'failed') : 'completed');
+
+                if (failed > 0) {
+                    const errors = result.errors && Array.isArray(result.errors) ? result.errors : [];
+                    const firstError = errors.length ? ` First error: ${errors[0].error || ''}` : '';
+                    alert(`⚠️ Campaign status: ${status}. Sent ${sent}/${total}. Failed ${failed}.${firstError}`);
+                } else {
+                    alert(`✅ Campaign ${status}. Sent ${sent}/${total} messages.`);
+                }
             }
         } catch (error) {
             console.error('Error sending messages:', error);
@@ -1205,8 +1423,8 @@ function MarketingDashboard() {
                             <Upload size={18} />
                             Upload Contacts
                         </button>
-                        <button className="btn btn-primary" onClick={() => openComposeModal('email')}>
-                            <Mail size={18} />
+                        <button className="btn btn-primary" onClick={() => openComposeModal(null)}>
+                            <Plus size={18} />
                             New Campaign
                         </button>
                     </div>
@@ -1557,7 +1775,7 @@ function MarketingDashboard() {
                         </div>
                         <h3>No campaigns yet</h3>
                         <p>Start your first email or WhatsApp campaign to reach your contacts.</p>
-                        <button className="btn btn-primary" onClick={() => openComposeModal('email')}>
+                        <button className="btn btn-primary" onClick={() => openComposeModal(null)}>
                             <Plus size={20} />
                             Create First Campaign
                         </button>
@@ -2828,7 +3046,7 @@ function MarketingDashboard() {
                             </div>
                             <h3>No scheduled campaigns</h3>
                             <p>You haven't scheduled any campaigns yet. When creating a campaign, choose a future date to schedule it.</p>
-                            <button className="btn btn-primary" onClick={() => openComposeModal('email')}>
+                            <button className="btn btn-primary" onClick={() => openComposeModal(null)}>
                                 <Plus size={20} />
                                 Create Campaign
                             </button>
@@ -3168,7 +3386,7 @@ function MarketingDashboard() {
 
                         <button
                             className="btn btn-primary create-btn"
-                            onClick={() => openComposeModal('email')}
+                            onClick={() => openComposeModal(null)}
                         >
                             <Plus size={18} />
                             <span>New Campaign</span>

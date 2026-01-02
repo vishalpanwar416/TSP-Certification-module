@@ -117,6 +117,12 @@ export const campaignsAPI = {
      * @param {string} campaignData.scheduledAt - Optional scheduled time (ISO string)
      */
     async create(campaignData) {
+        // Log message before sending to API
+        console.log('📤 API Request: Creating campaign with message:');
+        console.log('   Message length:', campaignData.message?.length || 0);
+        console.log('   Message has newlines:', campaignData.message?.includes('\n') || false);
+        console.log('   Full message:', JSON.stringify(campaignData.message));
+        
         return apiRequest('/marketing/campaigns', {
             method: 'POST',
             body: JSON.stringify(campaignData),
