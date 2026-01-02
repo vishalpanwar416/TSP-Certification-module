@@ -1918,28 +1918,8 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                     const result = await sendBulkWhatsApp(contact.phone, personalizedMessage, safeMediaUrl, safeFilename, whatsappCampaign);
 
                     // Verify the message was actually sent
-                    // Check for explicit failure first
-                    if (result && result.success === false) {
-                        console.error(`❌ WhatsApp message explicitly failed for ${contact.phone}:`, result);
-                        const errorMsg = result.error || result.message || result.warning || 'Message send failed';
-                        throw new Error(errorMsg);
-                    }
-
-                    // If we have a warning, log it - this indicates the message might not have been sent
-                    if (result?.warning) {
-                        console.warn(`⚠️ WhatsApp message warning for ${contact.phone}:`, result.warning);
-                        // If there's a warning about missing success indicator, treat as failure
-                        if (result.warning.includes('lacks clear success indicator')) {
-                            console.error(`❌ Message likely not sent due to missing success indicator`);
-                            throw new Error(result.warning);
-                        }
-                    }
-
-                    // Check for success - must have explicit success === true
-                    // Don't be lenient - if AiSensy doesn't confirm, it likely didn't send
-                    if (result && result.success === true) {
+                    if (result && result.success !== false) {
                         sentCount++;
-                        console.log(`✅ WhatsApp message confirmed sent to ${contact.phone}${result?.messageId ? ` (ID: ${result.messageId})` : ''}${result?.status ? ` (Status: ${result.status})` : ''}`);
 
                         // Update contact stats
                         const contactRef = db.collection('marketing_contacts').doc(contact.id);
@@ -1949,29 +1929,19 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                             last_contact_type: 'whatsapp'
                         });
                     } else {
-                        // No clear success - treat as failure
-                        console.error(`❌ WhatsApp message send verification failed for ${contact.phone}`);
-                        console.error(`❌ Result:`, JSON.stringify(result, null, 2));
-                        throw new Error(result?.error || result?.warning || 'Message send failed - AiSensy did not confirm delivery');
+                        throw new Error(result?.error || 'Message send failed');
                     }
                 } catch (error) {
                     console.error(`Failed to send WhatsApp to ${contact.phone}:`, error);
                     console.error(`Error stack:`, error.stack);
-                    
-                    // Safely log error details without referencing variables that might not be in scope
-                    try {
-                        console.error(`Error details:`, {
-                            message: error.message,
-                            name: error.name,
-                            contactId: contact.id,
-                            contactPhone: contact.phone,
-                            hasCertificateAttachment: !!certificateAttachment
-                        });
-                    } catch (logError) {
-                        // If logging fails, just log the basic error
-                        console.error(`Error occurred (logging details failed):`, error.message);
-                    }
-                    
+                    console.error(`Error details:`, {
+                        message: error.message,
+                        name: error.name,
+                        contactId: contact.id,
+                        contactPhone: contact.phone,
+                        hasMediaUrl: typeof finalMediaUrl !== 'undefined',
+                        mediaUrlValue: finalMediaUrl
+                    });
                     failedCount++;
                     // Ensure error message is safe and doesn't reference undefined variables
                     const errorMessage = error.message || error.toString() || 'Unknown error occurred';
