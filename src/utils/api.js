@@ -3,7 +3,29 @@
  * Provides common API request helper and base URL for all services.
  */
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
+// Get API URL from environment variable or use default
+let envApiUrl = import.meta.env.VITE_API_URL;
+
+// Fix common issues with the URL
+if (envApiUrl) {
+    // Fix missing 'h' in https (common issue)
+    if (envApiUrl.startsWith('ttps://')) {
+        envApiUrl = 'h' + envApiUrl;
+    }
+    // Ensure it starts with http:// or https://
+    if (!envApiUrl.startsWith('http://') && !envApiUrl.startsWith('https://')) {
+        envApiUrl = 'https://' + envApiUrl;
+    }
+    // Remove trailing slash
+    envApiUrl = envApiUrl.replace(/\/$/, '');
+}
+
+export const API_BASE_URL = envApiUrl || 'https://us-central1-channel-partner-54334.cloudfunctions.net/api';
+
+// Log for debugging
+console.log('[API Config] VITE_API_URL (raw):', import.meta.env.VITE_API_URL);
+console.log('[API Config] VITE_API_URL (processed):', envApiUrl || 'NOT SET - using default');
+console.log('[API Config] Using API Base URL:', API_BASE_URL);
 
 /**
  * Make API request helper

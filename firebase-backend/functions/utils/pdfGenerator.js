@@ -1,4 +1,11 @@
-const puppeteer = require('puppeteer');
+// Use puppeteer-core for Cloud Functions (lighter, no bundled Chrome)
+// Fallback to puppeteer if puppeteer-core is not available
+let puppeteer;
+try {
+  puppeteer = require('puppeteer-core');
+} catch (e) {
+  puppeteer = require('puppeteer');
+}
 const fs = require('fs');
 const path = require('path');
 
@@ -196,13 +203,75 @@ const generateCertificatePDF = async (certificateData, templateUrl = null) => {
 
     const launchOptions = {
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--single-process',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-client-side-phishing-detection',
+        '--disable-default-apps',
+        '--disable-features=TranslateUI',
+        '--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+        '--disable-popup-blocking',
+        '--disable-prompt-on-repost',
+        '--disable-renderer-backgrounding',
+        '--disable-sync',
+        '--disable-translate',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--safebrowsing-disable-auto-update',
+        '--enable-automation',
+        '--password-store=basic',
+        '--use-mock-keychain'
+      ]
     };
+
+    // Try to use @sparticuz/chromium if available (for Cloud Functions)
+    let executablePath = null;
+    try {
+      const chromium = require('@sparticuz/chromium');
+      executablePath = await chromium.executablePath();
+      console.log('✅ Using @sparticuz/chromium:', executablePath);
+      // Merge @sparticuz/chromium args with our custom args
+      launchOptions.args = [...chromium.args, ...launchOptions.args];
+    } catch (e) {
+      // @sparticuz/chromium not installed, try bundled Chrome
+      console.log('⚠️ @sparticuz/chromium not available, trying alternatives:', e.message);
+      try {
+        executablePath = puppeteer.executablePath();
+        if (executablePath && fs.existsSync(executablePath)) {
+          console.log('✅ Using Puppeteer bundled Chrome:', executablePath);
+        } else {
+          console.log('⚠️ Puppeteer executablePath not found, using auto-detect');
+        }
+      } catch (e2) {
+        console.log('⚠️ Using default Puppeteer Chrome (auto-detect)');
+      }
+    }
 
     // On local Mac, if bundled browser fails, try system Chrome
     if (process.platform === 'darwin' && fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) {
-      launchOptions.executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      console.log('✅ Using system Chrome on Mac:', executablePath);
     }
+
+    if (executablePath) {
+      launchOptions.executablePath = executablePath;
+    }
+
+    console.log('🚀 Launching Puppeteer with options:', { 
+      headless: launchOptions.headless, 
+      executablePath: launchOptions.executablePath ? 'set' : 'auto',
+      argsCount: launchOptions.args.length 
+    });
 
     browser = await puppeteer.launch(launchOptions);
 
@@ -280,12 +349,75 @@ const generateCertificateImage = async (certificateData, templateUrl = null) => 
 
     const launchOptions = {
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--single-process',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-client-side-phishing-detection',
+        '--disable-default-apps',
+        '--disable-features=TranslateUI',
+        '--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+        '--disable-popup-blocking',
+        '--disable-prompt-on-repost',
+        '--disable-renderer-backgrounding',
+        '--disable-sync',
+        '--disable-translate',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--safebrowsing-disable-auto-update',
+        '--enable-automation',
+        '--password-store=basic',
+        '--use-mock-keychain'
+      ]
     };
 
-    if (process.platform === 'darwin' && fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) {
-      launchOptions.executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    // Try to use @sparticuz/chromium if available (for Cloud Functions)
+    let executablePath = null;
+    try {
+      const chromium = require('@sparticuz/chromium');
+      executablePath = await chromium.executablePath();
+      console.log('✅ Using @sparticuz/chromium:', executablePath);
+      // Merge @sparticuz/chromium args with our custom args
+      launchOptions.args = [...chromium.args, ...launchOptions.args];
+    } catch (e) {
+      // @sparticuz/chromium not installed, try bundled Chrome
+      console.log('⚠️ @sparticuz/chromium not available, trying alternatives:', e.message);
+      try {
+        executablePath = puppeteer.executablePath();
+        if (executablePath && fs.existsSync(executablePath)) {
+          console.log('✅ Using Puppeteer bundled Chrome:', executablePath);
+        } else {
+          console.log('⚠️ Puppeteer executablePath not found, using auto-detect');
+        }
+      } catch (e2) {
+        console.log('⚠️ Using default Puppeteer Chrome (auto-detect)');
+      }
     }
+
+    // On local Mac, if bundled browser fails, try system Chrome
+    if (process.platform === 'darwin' && fs.existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')) {
+      executablePath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      console.log('✅ Using system Chrome on Mac:', executablePath);
+    }
+
+    if (executablePath) {
+      launchOptions.executablePath = executablePath;
+    }
+
+    console.log('🚀 Launching Puppeteer with options:', { 
+      headless: launchOptions.headless, 
+      executablePath: launchOptions.executablePath ? 'set' : 'auto',
+      argsCount: launchOptions.args.length 
+    });
 
     browser = await puppeteer.launch(launchOptions);
 

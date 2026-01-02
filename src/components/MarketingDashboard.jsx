@@ -341,6 +341,18 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
     const [formatPDF, setFormatPDF] = useState(true);
     const [formatJPG, setFormatJPG] = useState(false);
     const [whatsappCampaign, setWhatsappCampaign] = useState('');
+    const [scheduleEnabled, setScheduleEnabled] = useState(false);
+    const [scheduleDate, setScheduleDate] = useState('');
+    const [scheduleTime, setScheduleTime] = useState('');
+
+    // Set default schedule to tomorrow at 10 AM
+    useEffect(() => {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const dateStr = tomorrow.toISOString().split('T')[0];
+        setScheduleDate(dateStr);
+        setScheduleTime('10:00');
+    }, []);
 
     const filteredContacts = contacts.filter(contact =>
         contact.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -386,9 +398,21 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
             alert('Please select at least one format (PDF or JPG)');
             return;
         }
+        if (scheduleEnabled) {
+            if (!scheduleDate || !scheduleTime) {
+                alert('Please select both date and time for scheduling');
+                return;
+            }
+            const scheduledDateTime = new Date(`${scheduleDate}T${scheduleTime}`);
+            if (scheduledDateTime <= new Date()) {
+                alert('Scheduled time must be in the future');
+                return;
+            }
+        }
 
         setSending(true);
         try {
+            const scheduledAt = scheduleEnabled ? new Date(`${scheduleDate}T${scheduleTime}`).toISOString() : null;
             await onSend({
                 type,
                 subject,
@@ -401,7 +425,8 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                         jpg: formatJPG
                     }
                 } : null,
-                whatsappCampaign: whatsappCampaign || null
+                whatsappCampaign: whatsappCampaign || null,
+                scheduledAt
             });
             onClose();
         } catch (error) {
@@ -647,6 +672,51 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                                 </div>
                             )}
                         </div>
+
+                        {/* Scheduling Section */}
+                        <div className="form-group" style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontWeight: '500', cursor: 'pointer' }}>
+                                <input
+                                    type="checkbox"
+                                    checked={scheduleEnabled}
+                                    onChange={(e) => setScheduleEnabled(e.target.checked)}
+                                />
+                                <Calendar size={18} />
+                                <span>Schedule for Later</span>
+                            </label>
+
+                            {scheduleEnabled && (
+                                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                                    <div className="form-group" style={{ flex: '1', minWidth: '200px' }}>
+                                        <label className="form-label" htmlFor="schedule_date" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Calendar size={16} />
+                                            Date
+                                        </label>
+                                        <input
+                                            type="date"
+                                            id="schedule_date"
+                                            className="form-input"
+                                            value={scheduleDate}
+                                            onChange={(e) => setScheduleDate(e.target.value)}
+                                            min={new Date().toISOString().split('T')[0]}
+                                        />
+                                    </div>
+                                    <div className="form-group" style={{ flex: '1', minWidth: '200px' }}>
+                                        <label className="form-label" htmlFor="schedule_time" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Clock size={16} />
+                                            Time
+                                        </label>
+                                        <input
+                                            type="time"
+                                            id="schedule_time"
+                                            className="form-input"
+                                            value={scheduleTime}
+                                            onChange={(e) => setScheduleTime(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
                 <div className="modal-footer">
@@ -659,12 +729,12 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                         {sending ? (
                             <>
                                 <span className="btn-spinner"></span>
-                                Sending...
+                                {scheduleEnabled ? 'Scheduling...' : 'Sending...'}
                             </>
                         ) : (
                             <>
-                                <Send size={18} />
-                                Send to {selectedContacts.length} {selectedContacts.length === 1 ? 'Contact' : 'Contacts'}
+                                {scheduleEnabled ? <Calendar size={18} /> : <Send size={18} />}
+                                {scheduleEnabled ? 'Schedule' : 'Send'} to {selectedContacts.length} {selectedContacts.length === 1 ? 'Contact' : 'Contacts'}
                             </>
                         )}
                     </button>
@@ -771,31 +841,51 @@ function MarketingDashboard() {
     const loadDataFromFirebase = async () => {
         setLoading(true);
         try {
+            console.log('[DEBUG] Starting to load data from API...');
+            console.log('[DEBUG] API Base URL:', API_BASE_URL);
+            
             // Load contacts
+            console.log('[DEBUG] Loading contacts...');
             const contactsData = await firebaseService.contacts.getAll();
-            setContacts(contactsData);
+            console.log('[DEBUG] Contacts loaded:', contactsData?.length || 0, 'items');
+            setContacts(contactsData || []);
 
             // Load campaigns
+            console.log('[DEBUG] Loading campaigns...');
             const campaignsData = await firebaseService.campaigns.getAll();
-            setCampaigns(campaignsData);
+            console.log('[DEBUG] Campaigns loaded:', campaignsData?.length || 0, 'items');
+            setCampaigns(campaignsData || []);
 
             // Load templates
+            console.log('[DEBUG] Loading templates...');
             const templatesData = await firebaseService.templates.getAll();
-            setTemplates(templatesData);
+            console.log('[DEBUG] Templates loaded:', templatesData?.length || 0, 'items');
+            setTemplates(templatesData || []);
 
             // Load certificates
+            console.log('[DEBUG] Loading certificates...');
             try {
                 const certificatesData = await certificateAPI.getAll();
+                console.log('[DEBUG] Certificates loaded:', certificatesData?.length || 0, 'items');
                 setCertificates(Array.isArray(certificatesData) ? certificatesData : []);
             } catch (error) {
-                console.error('Error loading certificates:', error);
+                console.error('[ERROR] Error loading certificates:', error);
+                console.error('[ERROR] Certificate error details:', error.message, error.stack);
                 setCertificates([]);
             }
 
             // Update stats
-            updateStats(contactsData, campaignsData);
+            updateStats(contactsData || [], campaignsData || []);
+            console.log('[DEBUG] Data loading completed successfully');
         } catch (error) {
-            console.error('Error loading data from Firebase:', error);
+            console.error('[ERROR] Error loading data from Firebase:', error);
+            console.error('[ERROR] Error details:', error.message, error.stack);
+            console.error('[ERROR] API Base URL was:', API_BASE_URL);
+            // Set empty arrays to prevent UI errors
+            setContacts([]);
+            setCampaigns([]);
+            setTemplates([]);
+            setCertificates([]);
         } finally {
             setLoading(false);
         }
@@ -900,7 +990,9 @@ function MarketingDashboard() {
                     subject: data.subject,
                     message: data.message,
                     contactIds: data.contactIds,
-                    includeCertificate: data.includeCertificate
+                    includeCertificate: data.includeCertificate,
+                    scheduledAt: data.scheduledAt || null,
+                    whatsappCampaign: data.whatsappCampaign || null
                 },
                 contacts
             );
@@ -1004,7 +1096,6 @@ function MarketingDashboard() {
         { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
         { id: 'templates', label: 'Templates', icon: BookOpen },
         { id: 'scheduled', label: 'Scheduled', icon: Calendar },
-        { id: 'campaigns', label: 'All Campaigns', icon: Layers },
     ];
 
 
@@ -1026,7 +1117,6 @@ function MarketingDashboard() {
             case 'whatsapp': return 'WhatsApp';
             case 'templates': return 'Message Templates';
             case 'scheduled': return 'Scheduled Campaigns';
-            case 'campaigns': return 'All Campaigns';
             default: return 'Dashboard';
         }
     };
@@ -1045,8 +1135,6 @@ function MarketingDashboard() {
                 return renderTemplatesView();
             case 'scheduled':
                 return renderScheduledView();
-            case 'campaigns':
-                return renderCampaignsView();
             default:
                 return renderDashboardView();
         }
@@ -1166,8 +1254,8 @@ function MarketingDashboard() {
                                     Campaign Performance
                                 </h2>
                                 <p className="card-description">Email vs WhatsApp delivery rates</p>
-                            </div>
-                        </div>
+                    </div>
+                </div>
                         <div className="card-body">
                             <div className="chart-container">
                                 <div className="chart-bars">
@@ -1182,9 +1270,9 @@ function MarketingDashboard() {
                                                 }}
                                             >
                                                 <span className="chart-bar-value">{stats.emailsSent}</span>
-                                            </div>
-                                        </div>
-                                    </div>
+                    </div>
+                </div>
+                    </div>
                                     <div className="chart-bar-group">
                                         <div className="chart-bar-label">WhatsApp</div>
                                         <div className="chart-bar-wrapper">
@@ -1196,10 +1284,10 @@ function MarketingDashboard() {
                                                 }}
                                             >
                                                 <span className="chart-bar-value">{stats.whatsappSent}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+                </div>
+                    </div>
+                </div>
+                    </div>
                                 <div className="chart-legend">
                                     <div className="legend-item">
                                         <span className="legend-color email"></span>
@@ -1822,15 +1910,6 @@ function MarketingDashboard() {
                             <Image size={18} />
                             {certificateTemplate ? 'Update Template' : 'Upload Template'}
                         </button>
-                        <div className="search-box">
-                            <Search size={18} />
-                            <input
-                                type="text"
-                                placeholder="Search certificates..."
-                                value={certificateSearchQuery}
-                                onChange={(e) => setCertificateSearchQuery(e.target.value)}
-                            />
-                        </div>
                     </div>
                 </div>
 
@@ -2466,61 +2545,6 @@ function MarketingDashboard() {
         );
     };
 
-    const renderCampaignsView = () => (
-        <>
-            <div className="page-actions">
-                <div className="page-actions-left">
-                    <h2>All Campaigns ({campaigns.length})</h2>
-                </div>
-            </div>
-
-            <div className="card table-card">
-                {campaigns.length === 0 ? (
-                    <div className="empty-state">
-                        <div className="empty-icon">
-                            <Layers size={64} />
-                        </div>
-                        <h3>No campaigns yet</h3>
-                        <p>Start your first campaign to see it here.</p>
-                    </div>
-                ) : (
-                    <div className="table-container">
-                        <table className="table">
-                            <thead>
-                                <tr>
-                                    <th>Type</th>
-                                    <th>Subject/Message</th>
-                                    <th>Recipients</th>
-                                    <th>Date</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {campaigns.slice().reverse().map((campaign) => (
-                                    <tr key={campaign.id}>
-                                        <td>
-                                            <span className={`campaign-type-badge ${campaign.type}`}>
-                                                {campaign.type === 'email' ? <Mail size={14} /> : <MessageCircle size={14} />}
-                                                {campaign.type === 'email' ? 'Email' : 'WhatsApp'}
-                                            </span>
-                                        </td>
-                                        <td className="message-preview">
-                                            {campaign.subject || campaign.message.substring(0, 50) + '...'}
-                                        </td>
-                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
-                                        <td>
-                                            {renderStatusBadge(campaign)}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </>
-    );
 
 
     return (
@@ -2604,10 +2628,10 @@ function MarketingDashboard() {
             {mobileMenuOpen && (
                 <div className="mobile-overlay" onClick={() => setMobileMenuOpen(false)} />
             )}
-
+            
             {/* Notification Overlay */}
             {showNotifications && (
-                <div
+                <div 
                     style={{
                         position: 'fixed',
                         top: 0,
@@ -2647,7 +2671,7 @@ function MarketingDashboard() {
                         </div>
 
                         <div className="notification-container" style={{ position: 'relative' }}>
-                            <button
+                            <button 
                                 className="header-icon-btn notification-btn"
                                 onClick={() => setShowNotifications(!showNotifications)}
                             >
@@ -2656,9 +2680,9 @@ function MarketingDashboard() {
                                     <span className="notification-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
                                 )}
                             </button>
-
+                            
                             {showNotifications && (
-                                <div
+                                <div 
                                     className="notification-dropdown"
                                     style={{
                                         position: 'absolute',
@@ -2754,25 +2778,25 @@ function MarketingDashboard() {
                                                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
                                                             {getIcon()}
                                                             <div style={{ flex: 1 }}>
-                                                                <p style={{
-                                                                    margin: 0,
-                                                                    fontSize: '14px',
+                                                                <p style={{ 
+                                                                    margin: 0, 
+                                                                    fontSize: '14px', 
                                                                     fontWeight: notification.read ? '400' : '600',
                                                                     color: '#1f2937'
                                                                 }}>
                                                                     {notification.title}
                                                                 </p>
-                                                                <p style={{
-                                                                    margin: '4px 0 0 0',
-                                                                    fontSize: '12px',
+                                                                <p style={{ 
+                                                                    margin: '4px 0 0 0', 
+                                                                    fontSize: '12px', 
                                                                     color: '#6b7280'
                                                                 }}>
                                                                     {notification.message}
                                                                 </p>
                                                                 {notification.created_at && (
-                                                                    <p style={{
-                                                                        margin: '4px 0 0 0',
-                                                                        fontSize: '11px',
+                                                                    <p style={{ 
+                                                                        margin: '4px 0 0 0', 
+                                                                        fontSize: '11px', 
                                                                         color: '#9ca3af'
                                                                     }}>
                                                                         {formatDateTime(notification.created_at)}
