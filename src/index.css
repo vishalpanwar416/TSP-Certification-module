@@ -1118,6 +1118,16 @@ a:hover {
   border-color: var(--danger);
 }
 
+.action-btn-edit {
+  color: var(--info);
+}
+
+.action-btn-edit:hover {
+  background: var(--info);
+  color: white;
+  border-color: var(--info);
+}
+
 .action-btn-preview {
   color: var(--primary);
 }

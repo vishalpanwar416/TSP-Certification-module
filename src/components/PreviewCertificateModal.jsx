@@ -1,20 +1,26 @@
 import { X, Download, FileText, Loader } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { generateCertificateDataUrl } from '../utils/certificateGenerator';
 
 function PreviewCertificateModal({ certificate, onClose, certificateTemplate }) {
     const [previewUrl, setPreviewUrl] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
-    useEffect(() => {
-        if (certificate) {
-            generatePreview();
+    const generatePreview = useCallback(async () => {
+        if (!certificate) {
+            setLoading(false);
+            return;
         }
-    }, [certificate, certificateTemplate]);
 
-    const generatePreview = async () => {
         setLoading(true);
+        setPreviewUrl(null);
+        setError(null);
+        
         try {
+            console.log('[Preview] Generating preview for certificate:', certificate.id);
+            console.log('[Preview] Certificate template:', certificateTemplate);
+            
             // For default certificate, generate preview with demo data
             if (certificate.id === 'default' || certificate.is_default) {
                 // Create demo certificate data for preview
@@ -30,21 +36,47 @@ function PreviewCertificateModal({ certificate, onClose, certificateTemplate }) 
                 };
                 // Use uploaded template URL if available, otherwise use default
                 const templateUrl = certificateTemplate?.url || certificate.pdf_url || null;
+                console.log('[Preview] Using template URL:', templateUrl);
                 const url = await generateCertificateDataUrl(demoData, templateUrl);
                 setPreviewUrl(url);
                 setLoading(false);
             } else {
                 // For regular certificates, use their template if available
                 const templateUrl = certificateTemplate?.url || null;
-                const url = await generateCertificateDataUrl(certificate, templateUrl);
+                console.log('[Preview] Using template URL:', templateUrl);
+                
+                // Normalize certificate data to ensure all required fields are present
+                const normalizedData = {
+                    name: certificate.name || certificate.recipient_name || 'Recipient Name',
+                    recipient_name: certificate.recipient_name || certificate.name || 'Recipient Name',
+                    certificate_number: certificate.certificate_number || certificate.certificateNumber || '-',
+                    certificateNumber: certificate.certificateNumber || certificate.certificate_number || '-',
+                    award_rera_number: certificate.award_rera_number || certificate.rera_awarde_no || certificate.reraAwardeNo || '-',
+                    rera_awarde_no: certificate.rera_awarde_no || certificate.award_rera_number || certificate.reraAwardeNo || '-',
+                    reraAwardeNo: certificate.reraAwardeNo || certificate.award_rera_number || certificate.rera_awarde_no || '-',
+                    professional: certificate.professional || certificate.Professional || 'RERA CONSULTANT',
+                    Professional: certificate.Professional || certificate.professional || 'RERA CONSULTANT'
+                };
+                
+                console.log('[Preview] Certificate data (normalized):', normalizedData);
+                const url = await generateCertificateDataUrl(normalizedData, templateUrl);
                 setPreviewUrl(url);
                 setLoading(false);
             }
         } catch (error) {
-            console.error('Error generating certificate preview:', error);
+            console.error('[Preview] Error generating certificate preview:', error);
+            console.error('[Preview] Error details:', error.message, error.stack);
+            setError(error.message || 'Failed to generate preview');
             setLoading(false);
+            setPreviewUrl(null);
         }
-    };
+    }, [certificate, certificateTemplate]);
+
+    useEffect(() => {
+        if (certificate) {
+            generatePreview();
+        }
+    }, [certificate, certificateTemplate, generatePreview]);
 
     if (!certificate) return null;
 
@@ -91,7 +123,7 @@ function PreviewCertificateModal({ certificate, onClose, certificateTemplate }) 
                                 <Loader className="spinner" size={48} />
                                 <p style={{ marginTop: '20px' }}>Generating dynamic preview...</p>
                             </div>
-                        ) : (
+                        ) : previewUrl ? (
                             <img
                                 src={previewUrl}
                                 style={{
@@ -100,7 +132,40 @@ function PreviewCertificateModal({ certificate, onClose, certificateTemplate }) 
                                     display: 'block'
                                 }}
                                 alt="Certificate Preview"
+                                onError={(e) => {
+                                    console.error('[Preview] Image failed to load:', e);
+                                    setError('Failed to load preview image');
+                                    setPreviewUrl(null);
+                                }}
                             />
+                        ) : (
+                            <div style={{ padding: '100px', textAlign: 'center', color: '#666' }}>
+                                <FileText size={48} style={{ marginBottom: '20px', opacity: 0.5 }} />
+                                <p style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>Failed to generate preview</p>
+                                {error && (
+                                    <p style={{ fontSize: '0.875rem', color: '#dc2626', marginBottom: '0.5rem' }}>
+                                        {error}
+                                    </p>
+                                )}
+                                <p style={{ fontSize: '0.875rem', marginTop: '10px', color: '#6b7280' }}>
+                                    Please check the browser console for details
+                                </p>
+                                <button
+                                    onClick={generatePreview}
+                                    style={{
+                                        marginTop: '1rem',
+                                        padding: '0.5rem 1rem',
+                                        backgroundColor: 'var(--primary)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '0.375rem',
+                                        cursor: 'pointer',
+                                        fontSize: '0.875rem'
+                                    }}
+                                >
+                                    Retry
+                                </button>
+                            </div>
                         )}
                     </div>
                 </div>

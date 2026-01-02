@@ -146,24 +146,82 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
     const formattedNumber = formatPhoneNumber(recipientNumber);
     console.log(`📤 Sending AiSensy message to ${formattedNumber} (Campaign: ${campaign})`);
 
+    // Process message: if it's a string, ensure it's not empty after trimming
+    // If media is provided, allow empty message (caption is optional)
+    let processedMessage = message;
+    if (typeof message === 'string') {
+        // IMPORTANT: Don't trim the message - preserve all newlines and whitespace
+        // Trimming would remove newlines and content after placeholders
+        // Only check if message is completely empty (all whitespace)
+        const trimmed = message.trim();
+        if (!mediaUrl && trimmed.length === 0) {
+            throw new Error('Message cannot be empty. Please provide message content.');
+        }
+        // Keep the original message completely intact - don't trim anything
+        // This ensures newlines after {{name}} and all content is preserved
+        processedMessage = message; // Use original message, never trimmed
+    }
+
+    // For AiSensy, handle message formatting
+    // IMPORTANT: Always send as a single string in templateParams array
+    // AiSensy campaigns expect the entire message as one parameter
+    // Splitting by newlines can cause issues with campaign templates
+    let templateParams;
+    if (Array.isArray(processedMessage)) {
+        // If already an array, join it back into a single string to avoid template parameter mismatches
+        templateParams = [processedMessage.join('\n')];
+    } else if (typeof processedMessage === 'string') {
+        // Normalize line endings (convert \r\n and \r to \n for consistency)
+        // CRITICAL: Send entire message as single string - do NOT split by newlines
+        // Campaign templates expect the full message in one parameter
+        const normalizedMessage = processedMessage.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        // Ensure we're sending as a single-element array with the complete message
+        templateParams = [normalizedMessage];
+    } else {
+        templateParams = [String(processedMessage || '')];
+    }
+
     // AiSensy API body - message goes in templateParams array
+    // CRITICAL: Ensure templateParams is always an array with exactly one string element
+    // This matches the test file pattern and ensures the campaign template receives the full message
+    if (!Array.isArray(templateParams) || templateParams.length === 0) {
+        console.error('❌ Invalid templateParams, fixing:', templateParams);
+        templateParams = [String(processedMessage || '')];
+    }
+    
+    // If somehow we have multiple params, join them (campaign might only accept one)
+    if (templateParams.length > 1) {
+        console.warn(`⚠️ Warning: templateParams has ${templateParams.length} elements. Joining into single string.`);
+        console.warn(`⚠️ Campaign "${campaign}" might only support single parameter.`);
+        templateParams = [templateParams.join('\n')];
+    }
+
+    // Ensure the single parameter is a string
+    if (typeof templateParams[0] !== 'string') {
+        console.warn(`⚠️ templateParams[0] is not a string, converting:`, typeof templateParams[0]);
+        templateParams[0] = String(templateParams[0] || '');
+    }
+
     const body = {
         apiKey: whatsappConfig.apiKey,
         campaignName: campaign,
         destination: formattedNumber,
         userName: 'User',
         source: 'API',
-        templateParams: Array.isArray(message) ? message : [message]
+        templateParams: templateParams
     };
 
-    let finalMediaUrl = mediaUrl;
-    if (mediaUrl && (mediaUrl.includes('localhost') || mediaUrl.includes('127.0.0.1'))) {
+    // Ensure mediaUrl is always defined (never undefined)
+    // Default to null if not provided or if it's undefined
+    let finalMediaUrl = (mediaUrl !== undefined && mediaUrl !== null && typeof mediaUrl === 'string') ? mediaUrl : null;
+    
+    if (finalMediaUrl && (finalMediaUrl.includes('localhost') || finalMediaUrl.includes('127.0.0.1'))) {
         console.warn('⚠️ Sending a LOCALHOST/EMULATOR URL to AiSensy. Unless you are using ngrok, AiSensy will fail to download this file.');
     }
 
     // Construct media object if URL is provided
     let media = undefined;
-    if (finalMediaUrl) {
+    if (finalMediaUrl && typeof finalMediaUrl === 'string' && finalMediaUrl.length > 0) {
         media = {
             url: finalMediaUrl,
             filename: filename || (finalMediaUrl.endsWith('.jpg') || finalMediaUrl.endsWith('.jpeg') ? 'certificate.jpg' : 'certificate.pdf')
@@ -175,12 +233,34 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
         media: media
     };
 
-    console.log('🚀 Sending request to AiSensy:', JSON.stringify({
+    // Log the full payload for debugging (with API key redacted)
+    const logPayload = {
         ...payload,
         apiKey: 'REDACTED', // Don't log the API key
-        destination: formattedNumber,
-        campaignName: body.campaignName
-    }, null, 2));
+    };
+    console.log('🚀 Sending request to AiSensy:');
+    console.log('   Campaign:', body.campaignName);
+    console.log('   Destination:', formattedNumber);
+    console.log('   Template Params:', JSON.stringify(templateParams));
+    console.log('   Template Params Count:', templateParams.length);
+    console.log('   Has Media:', !!media);
+    console.log('   Full Payload (API key redacted):', JSON.stringify(logPayload, null, 2));
+    
+    console.log('📝 Message Details:');
+    console.log('   Original length:', message?.length || 0);
+    console.log('   Processed length:', processedMessage?.length || 0);
+    console.log('   Has newlines:', processedMessage?.includes('\n') || false);
+    console.log('   Newline count:', (processedMessage?.match(/\n/g) || []).length);
+    console.log('   Message preview (first 200 chars):', processedMessage?.substring(0, 200) || '');
+    console.log('   Message preview (last 100 chars):', processedMessage?.substring(Math.max(0, processedMessage.length - 100)) || '');
+    console.log('   Full message:', JSON.stringify(processedMessage));
+
+    // Final validation before sending - ensure finalMediaUrl is never undefined
+    if (typeof finalMediaUrl === 'undefined') {
+        console.error('❌ CRITICAL: finalMediaUrl is undefined! This should never happen.');
+        finalMediaUrl = null; // Force to null
+    }
+    console.log('📎 Final mediaUrl check:', { type: typeof finalMediaUrl, value: finalMediaUrl, isNull: finalMediaUrl === null, isUndefined: finalMediaUrl === undefined });
 
     try {
         const response = await fetch(AISENSY_API_URL, {
@@ -194,35 +274,95 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
         const responseText = await response.text();
         console.log('AiSensy Response Status:', response.status);
         console.log('AiSensy Response:', responseText);
+        console.log('AiSensy Full Response (raw):', responseText);
 
         let data;
         try {
             data = JSON.parse(responseText);
         } catch (e) {
+            console.error('Failed to parse AiSensy response as JSON:', responseText);
             throw new Error(`Invalid JSON response: ${responseText}`);
         }
 
+        // Log the full parsed response for debugging
+        console.log('AiSensy Parsed Response:', JSON.stringify(data, null, 2));
+
         if (!response.ok) {
-            console.error('AiSensy API Error Response:', data);
-            const errorMsg = data.message || data.error || data.errorMessage || JSON.stringify(data);
+            console.error('AiSensy API Error Response (HTTP not OK):', data);
+            const errorMsg = data.message || data.error || data.errorMessage || data.msg || JSON.stringify(data);
             throw new Error(`AiSensy API Error: ${errorMsg}`);
         }
 
-        // Check for success indicators
-        if (data.success === false || data.status === 'failed' || data.error) {
-            console.error('AiSensy API Error:', data);
-            throw new Error(data.message || data.error || data.errorMessage || 'Failed to send AiSensy message');
+        // Check for explicit failure indicators
+        if (data.success === false || data.status === 'failed' || data.error || data.err) {
+            console.error('AiSensy API Error (explicit failure):', data);
+            const errorMsg = data.message || data.error || data.errorMessage || data.err || data.msg || 'Failed to send AiSensy message';
+            throw new Error(errorMsg);
         }
 
-        console.log(`✅ AiSensy message sent to ${formattedNumber}`);
+        // Check for warning indicators that might indicate issues
+        if (data.warning || data.warnings) {
+            console.warn('⚠️ AiSensy API Warning:', data.warning || data.warnings);
+        }
 
-        return {
-            success: true,
-            status: 'sent',
+        // More strict validation: Check if response actually indicates success
+        // AiSensy typically returns success indicators like: success: true, status: 'sent', or messageId
+        const hasSuccessIndicator = 
+            data.success === true || 
+            data.status === 'sent' || 
+            data.status === 'queued' || 
+            data.status === 'pending' ||
+            data.status === 'delivered' ||
+            data.messageId || 
+            data.id ||
+            data.message_id;
+
+        if (!hasSuccessIndicator) {
+            // If response is OK but no clear success indicator, this is suspicious
+            // Log detailed warning - message might not actually be sent
+            console.warn(`⚠️⚠️⚠️ CRITICAL WARNING: AiSensy response lacks clear success indicator for ${formattedNumber}`);
+            console.warn(`⚠️ Response data:`, JSON.stringify(data, null, 2));
+            console.warn(`⚠️ Campaign: ${campaign}`);
+            console.warn(`⚠️ Template Params sent:`, JSON.stringify(templateParams));
+            console.warn(`⚠️ This likely means the message was NOT sent. Possible causes:`);
+            console.warn(`⚠️ 1. Campaign template "${campaign}" doesn't match message format`);
+            console.warn(`⚠️ 2. Campaign template expects different number of parameters`);
+            console.warn(`⚠️ 3. Message format doesn't match campaign template requirements`);
+            console.warn(`⚠️ 4. Check AiSensy dashboard for delivery status`);
+            
+            // Still return success but with warning flag
+            // This allows the caller to see the warning in logs
+        }
+
+        // Additional validation: Check if response indicates the message was actually queued/sent
+        if (data.status && ['pending', 'queued', 'sent', 'delivered'].includes(data.status.toLowerCase())) {
+            console.log(`✅ AiSensy message ${data.status} to ${formattedNumber}${data.messageId ? ` (ID: ${data.messageId})` : ''}`);
+        } else if (data.messageId || data.id || data.message_id || data.success === true) {
+            console.log(`✅ AiSensy message sent to ${formattedNumber}${data.messageId || data.id || data.message_id ? ` (ID: ${data.messageId || data.id || data.message_id})` : ''}`);
+        } else {
+            console.warn(`⚠️ AiSensy response unclear for ${formattedNumber}. Response:`, JSON.stringify(data));
+            console.warn(`⚠️ Message may not have been sent. Please verify in AiSensy dashboard.`);
+        }
+
+        // Return result - set success based on whether we have clear indicators
+        // If no success indicator, mark as false so caller knows to investigate
+        const result = {
+            success: hasSuccessIndicator, // Only true if we have clear success indicator
+            status: data.status || (hasSuccessIndicator ? 'sent' : 'unknown'),
             to: formattedNumber,
             api: 'aisensy',
-            data: data
+            data: data,
+            messageId: data.messageId || data.id || data.message_id,
+            warning: !hasSuccessIndicator ? 'Response lacks clear success indicator - message may not have been sent. Check AiSensy dashboard.' : undefined
         };
+
+        // Log the result for debugging
+        if (!hasSuccessIndicator) {
+            console.warn(`⚠️ Returning result with success=false due to missing success indicator`);
+            console.warn(`⚠️ This means the message likely was NOT sent. Check AiSensy dashboard.`);
+        }
+
+        return result;
     } catch (error) {
         console.error('Error sending AiSensy message:', error);
         console.error('Error details:', {

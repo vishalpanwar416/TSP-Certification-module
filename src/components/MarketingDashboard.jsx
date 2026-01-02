@@ -43,7 +43,9 @@ import {
     FileImage,
     File,
     PieChart,
-    Image
+    Image,
+    Star,
+    RefreshCw
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuth } from '../contexts/AuthContext';
@@ -769,6 +771,7 @@ function MarketingDashboard() {
     const [composeType, setComposeType] = useState('email');
     const [templates, setTemplates] = useState([]);
     const [showTemplateModal, setShowTemplateModal] = useState(false);
+    const [editingTemplate, setEditingTemplate] = useState(null);
     const [scheduledCampaigns, setScheduledCampaigns] = useState([]);
     const [previewCertificate, setPreviewCertificate] = useState(null);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -777,8 +780,11 @@ function MarketingDashboard() {
     const [unreadCount, setUnreadCount] = useState(0);
     const [certificateSearchQuery, setCertificateSearchQuery] = useState('');
     const [certificateTemplate, setCertificateTemplate] = useState(null);
+    const [certificateTemplates, setCertificateTemplates] = useState([]); // All templates
     const [templateUploading, setTemplateUploading] = useState(false);
     const [showTemplateUpload, setShowTemplateUpload] = useState(false);
+    const [newTemplateName, setNewTemplateName] = useState('');
+    const [certificateViewMode, setCertificateViewMode] = useState('certificates'); // 'certificates' or 'templates'
 
     // Load data from Firebase on mount
     useEffect(() => {
@@ -809,32 +815,40 @@ function MarketingDashboard() {
         return () => clearInterval(interval);
     }, []);
 
-    // Load certificate template when certificates tab is active
+    // Load certificate templates when certificates tab is active
     useEffect(() => {
-        const loadCertificateTemplate = async () => {
+        const loadCertificateTemplates = async () => {
             try {
-                const response = await fetch(`${API_BASE_URL}/certificates/template`);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.success) {
-                        // Set template data, even if it's null (means using default)
-                        if (data.data && data.data.url && !data.data.isDefault) {
-                            setCertificateTemplate(data.data);
+                // Load all templates
+                const templatesResponse = await fetch(`${API_BASE_URL}/certificates/templates`);
+                if (templatesResponse.ok) {
+                    const templatesData = await templatesResponse.json();
+                    if (templatesData.success && Array.isArray(templatesData.data)) {
+                        setCertificateTemplates(templatesData.data);
+                    }
+                }
+                
+                // Load default template for backward compatibility
+                const defaultResponse = await fetch(`${API_BASE_URL}/certificates/template`);
+                if (defaultResponse.ok) {
+                    const defaultData = await defaultResponse.json();
+                    if (defaultData.success) {
+                        if (defaultData.data && defaultData.data.url && !defaultData.data.isDefault) {
+                            setCertificateTemplate(defaultData.data);
                         } else {
-                            // Using default template
                             setCertificateTemplate(null);
                         }
                     }
                 }
             } catch (error) {
-                console.error('Error loading template:', error);
-                // On error, assume using default
+                console.error('Error loading templates:', error);
+                setCertificateTemplates([]);
                 setCertificateTemplate(null);
             }
         };
 
         if (activeTab === 'certificates') {
-            loadCertificateTemplate();
+            loadCertificateTemplates();
         }
     }, [activeTab]);
 
@@ -1022,6 +1036,43 @@ function MarketingDashboard() {
         } catch (error) {
             console.error('Error sending messages:', error);
             alert('Failed to send messages. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Handle retry failed messages
+    const handleRetryFailed = async (campaignId) => {
+        if (!window.confirm('Retry sending failed messages for this campaign?')) {
+            return;
+        }
+
+        try {
+            setLoading(true);
+            const result = await firebaseService.campaigns.retry(campaignId);
+
+            // Reload data from Firebase
+            const [updatedContacts, updatedCampaigns] = await Promise.all([
+                firebaseService.contacts.getAll(),
+                firebaseService.campaigns.getAll()
+            ]);
+
+            setContacts(updatedContacts);
+            setCampaigns(updatedCampaigns);
+            updateStats(updatedContacts, updatedCampaigns);
+
+            const retryResults = result.data?.retryResults || result;
+            const sent = retryResults.sentCount || retryResults.sent_count || 0;
+            const failed = retryResults.failedCount || retryResults.failed_count || 0;
+
+            if (failed > 0) {
+                alert(`⚠️ Retry completed. Sent ${sent} messages, ${failed} still failed.`);
+            } else {
+                alert(`✅ Retry successful! All ${sent} messages sent successfully.`);
+            }
+        } catch (error) {
+            console.error('Error retrying campaign:', error);
+            alert('Failed to retry messages: ' + (error.response?.data?.error || error.message));
         } finally {
             setLoading(false);
         }
@@ -1521,27 +1572,53 @@ function MarketingDashboard() {
                                     <th>Recipients</th>
                                     <th>Date</th>
                                     <th>Status</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {campaigns.slice(-5).reverse().map((campaign) => (
-                                    <tr key={campaign.id}>
-                                        <td>
-                                            <span className={`campaign-type-badge ${campaign.type}`}>
-                                                {campaign.type === 'email' ? <Mail size={14} /> : <MessageCircle size={14} />}
-                                                {campaign.type === 'email' ? 'Email' : 'WhatsApp'}
-                                            </span>
-                                        </td>
-                                        <td className="message-preview">
-                                            {campaign.subject || campaign.message.substring(0, 50) + '...'}
-                                        </td>
-                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
-                                        <td>
-                                            {renderStatusBadge(campaign)}
-                                        </td>
-                                    </tr>
-                                ))}
+                                {campaigns.slice(-5).reverse().map((campaign) => {
+                                    const failedCount = campaign.failed_count || campaign.failedCount || 0;
+                                    const canRetry = failedCount > 0 && (campaign.status === 'failed' || campaign.status === 'partial');
+                                    
+                                    return (
+                                        <tr key={campaign.id}>
+                                            <td>
+                                                <span className={`campaign-type-badge ${campaign.type}`}>
+                                                    {campaign.type === 'email' ? <Mail size={14} /> : <MessageCircle size={14} />}
+                                                    {campaign.type === 'email' ? 'Email' : 'WhatsApp'}
+                                                </span>
+                                            </td>
+                                            <td className="message-preview">
+                                                {campaign.subject || campaign.message.substring(0, 50) + '...'}
+                                            </td>
+                                            <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
+                                            <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
+                                            <td>
+                                                {renderStatusBadge(campaign)}
+                                            </td>
+                                            <td>
+                                                {canRetry && (
+                                                    <button
+                                                        className="btn btn-sm btn-outline"
+                                                        onClick={() => handleRetryFailed(campaign.id)}
+                                                        disabled={loading}
+                                                        title={`Retry ${failedCount} failed message${failedCount > 1 ? 's' : ''}`}
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem',
+                                                            padding: '0.25rem 0.5rem',
+                                                            fontSize: '0.875rem'
+                                                        }}
+                                                    >
+                                                        <RefreshCw size={14} />
+                                                        Retry
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -1661,23 +1738,8 @@ function MarketingDashboard() {
     );
 
     const renderCertificatesView = () => {
-        // Create default certificate object
-        const defaultCertificate = {
-            id: 'default',
-            certificate_number: 'DEFAULT',
-            recipient_name: 'Default Certificate Template',
-            phone_number: '-',
-            email: '-',
-            whatsapp_sent: false,
-            created_at: null,
-            pdf_url: certificateTemplate?.url || '/Certificate.jpg',
-            is_default: true
-        };
-
-        // Combine default certificate with actual certificates
-        const allCertificates = [defaultCertificate, ...certificates];
-
-        const filteredCertificates = allCertificates.filter(cert =>
+        // Filter only actual certificates (not templates)
+        const filteredCertificates = certificates.filter(cert =>
             cert.recipient_name?.toLowerCase().includes(certificateSearchQuery.toLowerCase()) ||
             cert.certificate_number?.toLowerCase().includes(certificateSearchQuery.toLowerCase()) ||
             cert.phone_number?.includes(certificateSearchQuery) ||
@@ -1713,13 +1775,6 @@ function MarketingDashboard() {
         };
 
         const handleDownload = (certificate) => {
-            // For default certificate, open the template image
-            if (certificate.id === 'default') {
-                const url = certificateTemplate?.url || '/Certificate.jpg';
-                window.open(url, '_blank');
-                return;
-            }
-
             if (certificate.pdf_url) {
                 window.open(certificate.pdf_url, '_blank');
             } else {
@@ -1787,7 +1842,7 @@ function MarketingDashboard() {
 
                 let response;
                 try {
-                    response = await fetch(`${apiUrl}/certificates/template`, {
+                    response = await fetch(`${API_BASE_URL}/certificates/template`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -1795,7 +1850,8 @@ function MarketingDashboard() {
                         body: JSON.stringify({
                             image: base64String,
                             filename: file.name,
-                            contentType: file.type
+                            contentType: file.type,
+                            templateName: newTemplateName || file.name.replace(/\.[^/.]+$/, '') || 'Template'
                         }),
                         signal: controller.signal
                     });
@@ -1843,20 +1899,20 @@ function MarketingDashboard() {
                     console.log('Upload successful:', data);
 
                     if (data.success && data.data) {
-                        setCertificateTemplate(data.data);
                         alert('Certificate template uploaded successfully!');
+                        setNewTemplateName('');
                         setShowTemplateUpload(false);
-                        // Reload template to show updated version
+                        // Reload all templates
                         try {
-                            const loadResponse = await fetch(`${apiUrl}/certificates/template`);
-                            if (loadResponse.ok) {
-                                const loadData = await loadResponse.json();
-                                if (loadData.success && loadData.data && loadData.data.url) {
-                                    setCertificateTemplate(loadData.data);
+                            const templatesResponse = await fetch(`${API_BASE_URL}/certificates/templates`);
+                            if (templatesResponse.ok) {
+                                const templatesData = await templatesResponse.json();
+                                if (templatesData.success && Array.isArray(templatesData.data)) {
+                                    setCertificateTemplates(templatesData.data);
                                 }
                             }
                         } catch (loadError) {
-                            console.warn('Could not reload template:', loadError);
+                            console.warn('Could not reload templates:', loadError);
                         }
                     } else {
                         throw new Error(data.error || data.message || 'Invalid response from server');
@@ -1899,70 +1955,237 @@ function MarketingDashboard() {
             <>
                 <div className="page-actions">
                     <div className="page-actions-left">
-                        <h2>Certificates ({certificates.length})</h2>
+                        <h2>
+                            {certificateViewMode === 'certificates' 
+                                ? `Certificates (${certificates.length})` 
+                                : 'Certificate Templates'}
+                        </h2>
                     </div>
                     <div className="page-actions-right">
+                        {/* Toggle between Certificates and Templates */}
+                        <div style={{ 
+                            display: 'flex', 
+                            gap: '0.5rem', 
+                            alignItems: 'center',
+                            backgroundColor: '#f3f4f6',
+                            padding: '0.25rem',
+                            borderRadius: '0.5rem',
+                            marginRight: '1rem'
+                        }}>
                         <button
-                            className="btn btn-outline"
-                            onClick={() => setShowTemplateUpload(!showTemplateUpload)}
-                            title="Upload Certificate Template"
-                        >
-                            <Image size={18} />
-                            {certificateTemplate ? 'Update Template' : 'Upload Template'}
+                                className={`btn ${certificateViewMode === 'certificates' ? 'btn-primary' : 'btn-outline'}`}
+                                onClick={() => setCertificateViewMode('certificates')}
+                                style={{ 
+                                    padding: '0.5rem 1rem',
+                                    fontSize: '0.875rem',
+                                    border: 'none',
+                                    borderRadius: '0.375rem',
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap'
+                                }}
+                            >
+                                <Award size={16} style={{ marginRight: '0.25rem' }} />
+                                Certificates
+                            </button>
+                            <button
+                                className={`btn ${certificateViewMode === 'templates' ? 'btn-primary' : 'btn-outline'}`}
+                                onClick={() => setCertificateViewMode('templates')}
+                                style={{ 
+                                    padding: '0.5rem 1rem',
+                                    fontSize: '0.875rem',
+                                    border: 'none',
+                                    borderRadius: '0.375rem',
+                                    cursor: 'pointer',
+                                    whiteSpace: 'nowrap'
+                                }}
+                            >
+                                <FileImage size={16} style={{ marginRight: '0.25rem' }} />
+                                Templates
                         </button>
+                        </div>
                     </div>
                 </div>
 
-                {/* Certificate Template Upload Section */}
-                {showTemplateUpload && (
-                    <div className="card template-upload-card">
+                {/* Show Certificates View */}
+                {certificateViewMode === 'certificates' && (
+                    <div className="card table-card">
                         <div className="card-header">
                             <div className="card-header-left">
                                 <h2 className="card-title">
-                                    <Image size={24} />
-                                    Certificate Template
+                                    <Award size={24} />
+                                    All Certificates
                                 </h2>
                                 <p className="card-description">
-                                    Upload a blank certificate image. Names and information will be automatically added when creating certificates.
+                                    {certificateSearchQuery
+                                        ? `Showing ${filteredCertificates.length} of ${certificates.length} certificates`
+                                        : `Manage all ${certificates.length} generated certificates for contacts`
+                                    }
                                 </p>
                             </div>
-                        </div>
-                        <div className="card-body">
-                            {certificateTemplate ? (
-                                <div className="template-preview-section">
-                                    <p className="template-preview-label">Current Template:</p>
-                                    <div className="template-preview-image-wrapper">
-                                        <img
-                                            src={certificateTemplate.url}
-                                            alt="Certificate Template"
-                                            className="template-preview-image"
-                                        />
-                                    </div>
+                            <div className="card-header-right">
+                                <div className="search-box">
+                                    <Search size={18} />
+                                    <input
+                                        type="text"
+                                        placeholder="Search certificates..."
+                                        value={certificateSearchQuery}
+                                        onChange={(e) => setCertificateSearchQuery(e.target.value)}
+                                        className="search-input"
+                                    />
+                                    {certificateSearchQuery && (
                                     <button
-                                        className="btn btn-outline btn-sm"
-                                        onClick={async () => {
-                                            if (window.confirm('Are you sure you want to remove the custom template and use the default?')) {
-                                                try {
-                                                    const response = await fetch(`${API_BASE_URL}/certificates/template`, {
-                                                        method: 'DELETE'
-                                                    });
-                                                    if (response.ok) {
-                                                        setCertificateTemplate(null);
-                                                        alert('Custom template removed. Default certificate will be used.');
-                                                    }
-                                                } catch (error) {
-                                                    console.error('Error removing template:', error);
-                                                    alert('Failed to remove template');
-                                                }
-                                            }
-                                        }}
-                                        style={{ marginTop: 'var(--spacing-sm)' }}
+                                            className="search-clear"
+                                            onClick={() => setCertificateSearchQuery('')}
+                                            title="Clear search"
                                     >
                                         <X size={16} />
-                                        Remove Custom Template
                                     </button>
+                                    )}
                                 </div>
-                            ) : null}
+                            </div>
+                        </div>
+
+                        {loading ? (
+                            <div className="loading-container">
+                                <div className="spinner"></div>
+                                <p>Loading certificates...</p>
+                            </div>
+                        ) : filteredCertificates.length === 0 ? (
+                            <div className="empty-state">
+                                <div className="empty-icon">
+                                    <Award size={64} />
+                                </div>
+                                <h3>{certificateSearchQuery ? 'No certificates found' : 'No certificates yet'}</h3>
+                                <p>
+                                    {certificateSearchQuery
+                                        ? `No certificates match "${certificateSearchQuery}". Try a different search term.`
+                                        : 'Certificates will appear here once they are created for contacts.'
+                                    }
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="table-container">
+                                <table className="table">
+                                    <thead>
+                                        <tr>
+                                            <th>Recipient</th>
+                                            <th>Certificate #</th>
+                                            <th>Phone</th>
+                                            <th>Email</th>
+                                            <th>Status</th>
+                                            <th>Created</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {filteredCertificates.map((cert) => (
+                                            <tr key={cert.id}>
+                                                <td>
+                                                    <div className="recipient-cell">
+                                                        <div className="recipient-avatar">
+                                                            {cert.recipient_name?.charAt(0).toUpperCase() || 'U'}
+                                                        </div>
+                                                        <div className="recipient-info">
+                                                            <strong>{cert.recipient_name}</strong>
+                                                            {cert.award_rera_number && (
+                                                                <span className="recipient-subtext">RERA: {cert.award_rera_number}</span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <code className="certificate-code">
+                                                        {cert.certificate_number}
+                                                    </code>
+                                                </td>
+                                                <td>
+                                                    <span className="phone-number">{cert.phone_number || '-'}</span>
+                                                </td>
+                                                <td>
+                                                    <span>{cert.email || '-'}</span>
+                                                </td>
+                                                <td>
+                                                    {cert.whatsapp_sent ? (
+                                                        <span className="badge badge-success">
+                                                            <CheckCircle size={12} />
+                                                            Sent
+                                                        </span>
+                                                    ) : (
+                                                        <span className="badge badge-warning">
+                                                            <Clock size={12} />
+                                                            Pending
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    <span className="date-cell">
+                                                        {formatDate(cert.created_at)}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <div className="action-buttons">
+                                                        <button
+                                                            className="action-btn action-btn-view"
+                                                            onClick={() => handlePreview(cert)}
+                                                            title="Preview Certificate"
+                                                        >
+                                                            <Eye size={16} />
+                                                        </button>
+                                                        <button
+                                                            className="action-btn action-btn-download"
+                                                            onClick={() => handleDownload(cert)}
+                                                            title="Download PDF"
+                                                        >
+                                                            <Download size={16} />
+                                                        </button>
+                                                        <button
+                                                            className="action-btn action-btn-delete"
+                                                            onClick={() => handleDelete(cert.id, cert.certificate_number)}
+                                                            title="Delete"
+                                                        >
+                                                            <Trash2 size={16} />
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Show Certificate Templates View */}
+                {certificateViewMode === 'templates' && (
+                    <>
+                        {/* Upload New Template Section */}
+                        <div className="card template-upload-card">
+                            <div className="card-header">
+                                <div className="card-header-left">
+                                    <h2 className="card-title">
+                                        <Upload size={24} />
+                                        Upload New Template
+                                    </h2>
+                                    <p className="card-description">
+                                        Upload a blank certificate image. Names and information will be automatically added when creating certificates.
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="card-body">
+                                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                                    <label className="form-label">
+                                        Template Name
+                                    </label>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        placeholder="Enter template name (e.g., 'Default Template', 'Award Certificate')"
+                                        value={newTemplateName}
+                                        onChange={(e) => setNewTemplateName(e.target.value)}
+                                        disabled={templateUploading}
+                                    />
+                                </div>
                             <div className="form-group template-upload-group">
                                 <label className="form-label template-upload-label">
                                     <Upload size={20} />
@@ -2012,139 +2235,146 @@ function MarketingDashboard() {
                                     </div>
                                 </div>
                             </div>
-                            {templateUploading && (
-                                <div className="template-upload-progress">
-                                    <div className="spinner"></div>
-                                    <p>Uploading template...</p>
                                 </div>
-                            )}
                         </div>
-                    </div>
-                )}
 
-                <div className="card table-card">
+                        {/* All Templates List */}
+                        <div className="card table-card" style={{ marginTop: '1.5rem' }}>
                     <div className="card-header">
                         <div className="card-header-left">
                             <h2 className="card-title">
-                                <Award size={24} />
-                                All Certificates
+                                        <FileImage size={24} />
+                                        All Templates ({certificateTemplates.length})
                             </h2>
                             <p className="card-description">
-                                {certificateSearchQuery
-                                    ? `Showing ${filteredCertificates.length} of ${certificates.length} certificates`
-                                    : `Manage all ${certificates.length} generated certificates`
-                                }
+                                        Manage your certificate templates. Set one as default to use for new certificates.
                             </p>
                         </div>
                     </div>
-
                     {loading ? (
                         <div className="loading-container">
                             <div className="spinner"></div>
-                            <p>Loading certificates...</p>
+                                    <p>Loading templates...</p>
                         </div>
-                    ) : filteredCertificates.length === 0 ? (
+                            ) : certificateTemplates.length === 0 ? (
                         <div className="empty-state">
                             <div className="empty-icon">
-                                <Award size={64} />
+                                        <FileImage size={64} />
                             </div>
-                            <h3>{certificateSearchQuery ? 'No certificates found' : 'No certificates yet'}</h3>
-                            <p>
-                                {certificateSearchQuery
-                                    ? `No certificates match "${certificateSearchQuery}". Try a different search term.`
-                                    : 'Certificates will appear here once they are created.'
-                                }
-                            </p>
+                                    <h3>No templates yet</h3>
+                                    <p>Upload your first certificate template to get started.</p>
                         </div>
                     ) : (
                         <div className="table-container">
                             <table className="table">
                                 <thead>
                                     <tr>
-                                        <th>Recipient</th>
-                                        <th>Certificate #</th>
-                                        <th>Phone</th>
-                                        <th>Email</th>
+                                                <th>Template</th>
+                                                <th>Name</th>
+                                                <th>Filename</th>
                                         <th>Status</th>
-                                        <th>Created</th>
+                                                <th>Uploaded</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {filteredCertificates.map((cert) => (
-                                        <tr key={cert.id}>
-                                            <td>
-                                                <div className="recipient-cell">
-                                                    <div className="recipient-avatar">
-                                                        {cert.recipient_name?.charAt(0).toUpperCase() || 'U'}
-                                                    </div>
-                                                    <div className="recipient-info">
-                                                        <strong>{cert.recipient_name}</strong>
-                                                        {cert.award_rera_number && (
-                                                            <span className="recipient-subtext">RERA: {cert.award_rera_number}</span>
-                                                        )}
-                                                    </div>
+                                            {certificateTemplates.map((template) => (
+                                                <tr key={template.id}>
+                                                    <td>
+                                                        <div style={{ width: '120px', height: '80px', overflow: 'hidden', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
+                                                            <img
+                                                                src={template.url}
+                                                                alt={template.name}
+                                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                            />
                                                 </div>
                                             </td>
                                             <td>
-                                                <code className="certificate-code">
-                                                    {cert.certificate_number}
-                                                </code>
+                                                        <strong>{template.name || 'Unnamed Template'}</strong>
                                             </td>
                                             <td>
-                                                <span className="phone-number">{cert.phone_number || '-'}</span>
+                                                        <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                                                            {template.filename || 'N/A'}
+                                                        </span>
                                             </td>
                                             <td>
-                                                <span>{cert.email || '-'}</span>
-                                            </td>
-                                            <td>
-                                                {cert.id === 'default' ? (
-                                                    <span className="badge badge-info">
-                                                        <FileText size={12} />
-                                                        Template
-                                                    </span>
-                                                ) : cert.whatsapp_sent ? (
+                                                        {template.is_default ? (
                                                     <span className="badge badge-success">
                                                         <CheckCircle size={12} />
-                                                        Sent
+                                                                Default
                                                     </span>
-                                                ) : (
-                                                    <span className="badge badge-warning">
-                                                        <Clock size={12} />
-                                                        Pending
-                                                    </span>
+                                                        ) : (
+                                                            <span className="badge badge-info">Active</span>
                                                 )}
                                             </td>
                                             <td>
                                                 <span className="date-cell">
-                                                    {cert.id === 'default' ? 'System Template' : formatDate(cert.created_at)}
+                                                            {template.uploaded_at ? formatDate(template.uploaded_at) : 'N/A'}
                                                 </span>
                                             </td>
                                             <td>
                                                 <div className="action-buttons">
+                                                            {!template.is_default && (
                                                     <button
                                                         className="action-btn action-btn-view"
-                                                        onClick={() => handlePreview(cert)}
-                                                        title="Preview Certificate"
-                                                    >
-                                                        <Eye size={16} />
+                                                                    onClick={async () => {
+                                                                        try {
+                                                                            const response = await fetch(`${API_BASE_URL}/certificates/template/${template.id}/set-default`, {
+                                                                                method: 'POST'
+                                                                            });
+                                                                            if (response.ok) {
+                                                                                alert('Default template updated successfully!');
+                                                                                // Reload templates
+                                                                                const templatesResponse = await fetch(`${API_BASE_URL}/certificates/templates`);
+                                                                                if (templatesResponse.ok) {
+                                                                                    const templatesData = await templatesResponse.json();
+                                                                                    if (templatesData.success && Array.isArray(templatesData.data)) {
+                                                                                        setCertificateTemplates(templatesData.data);
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        } catch (error) {
+                                                                            console.error('Error setting default template:', error);
+                                                                            alert('Failed to set default template');
+                                                                        }
+                                                                    }}
+                                                                    title="Set as Default"
+                                                                >
+                                                                    <Star size={16} />
                                                     </button>
-                                                    <button
-                                                        className="action-btn action-btn-download"
-                                                        onClick={() => handleDownload(cert)}
-                                                        title={cert.id === 'default' ? 'View Template' : 'Download PDF'}
-                                                    >
-                                                        <Download size={16} />
-                                                    </button>
-                                                    {cert.id !== 'default' && (
+                                                            )}
                                                         <button
                                                             className="action-btn action-btn-delete"
-                                                            onClick={() => handleDelete(cert.id, cert.certificate_number)}
-                                                            title="Delete"
+                                                                onClick={async () => {
+                                                                    if (window.confirm(`Are you sure you want to delete "${template.name}"?`)) {
+                                                                        try {
+                                                                            const response = await fetch(`${API_BASE_URL}/certificates/template/${template.id}`, {
+                                                                                method: 'DELETE'
+                                                                            });
+                                                                            if (response.ok) {
+                                                                                alert('Template deleted successfully!');
+                                                                                // Reload templates
+                                                                                const templatesResponse = await fetch(`${API_BASE_URL}/certificates/templates`);
+                                                                                if (templatesResponse.ok) {
+                                                                                    const templatesData = await templatesResponse.json();
+                                                                                    if (templatesData.success && Array.isArray(templatesData.data)) {
+                                                                                        setCertificateTemplates(templatesData.data);
+                                                                                    }
+                                                                                }
+                                                                            } else {
+                                                                                const errorData = await response.json();
+                                                                                alert(errorData.error || 'Failed to delete template');
+                                                                            }
+                                                                        } catch (error) {
+                                                                            console.error('Error deleting template:', error);
+                                                                            alert('Failed to delete template');
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                title="Delete Template"
                                                         >
                                                             <Trash2 size={16} />
                                                         </button>
-                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
@@ -2154,6 +2384,8 @@ function MarketingDashboard() {
                         </div>
                     )}
                 </div>
+                    </>
+                )}
             </>
         );
     };
@@ -2203,19 +2435,45 @@ function MarketingDashboard() {
                                     <th>Recipients</th>
                                     <th>Date</th>
                                     <th>Status</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {campaigns.filter(c => c.type === 'email').reverse().map((campaign) => (
-                                    <tr key={campaign.id}>
-                                        <td>{campaign.subject}</td>
-                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
-                                        <td>
-                                            {renderStatusBadge(campaign)}
-                                        </td>
-                                    </tr>
-                                ))}
+                                {campaigns.filter(c => c.type === 'email').reverse().map((campaign) => {
+                                    const failedCount = campaign.failed_count || campaign.failedCount || 0;
+                                    const canRetry = failedCount > 0 && (campaign.status === 'failed' || campaign.status === 'partial');
+                                    
+                                    return (
+                                        <tr key={campaign.id}>
+                                            <td>{campaign.subject}</td>
+                                            <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
+                                            <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
+                                            <td>
+                                                {renderStatusBadge(campaign)}
+                                            </td>
+                                            <td>
+                                                {canRetry && (
+                                                    <button
+                                                        className="btn btn-sm btn-outline"
+                                                        onClick={() => handleRetryFailed(campaign.id)}
+                                                        disabled={loading}
+                                                        title={`Retry ${failedCount} failed message${failedCount > 1 ? 's' : ''}`}
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem',
+                                                            padding: '0.25rem 0.5rem',
+                                                            fontSize: '0.875rem'
+                                                        }}
+                                                    >
+                                                        <RefreshCw size={14} />
+                                                        Retry
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -2269,19 +2527,45 @@ function MarketingDashboard() {
                                     <th>Recipients</th>
                                     <th>Date</th>
                                     <th>Status</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {campaigns.filter(c => c.type === 'whatsapp').reverse().map((campaign) => (
-                                    <tr key={campaign.id}>
-                                        <td className="message-preview">{campaign.message.substring(0, 50)}...</td>
-                                        <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                        <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
-                                        <td>
-                                            {renderStatusBadge(campaign)}
-                                        </td>
-                                    </tr>
-                                ))}
+                                {campaigns.filter(c => c.type === 'whatsapp').reverse().map((campaign) => {
+                                    const failedCount = campaign.failed_count || campaign.failedCount || 0;
+                                    const canRetry = failedCount > 0 && (campaign.status === 'failed' || campaign.status === 'partial');
+                                    
+                                    return (
+                                        <tr key={campaign.id}>
+                                            <td className="message-preview">{campaign.message.substring(0, 50)}...</td>
+                                            <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
+                                            <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
+                                            <td>
+                                                {renderStatusBadge(campaign)}
+                                            </td>
+                                            <td>
+                                                {canRetry && (
+                                                    <button
+                                                        className="btn btn-sm btn-outline"
+                                                        onClick={() => handleRetryFailed(campaign.id)}
+                                                        disabled={loading}
+                                                        title={`Retry ${failedCount} failed message${failedCount > 1 ? 's' : ''}`}
+                                                        style={{
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '0.25rem',
+                                                            padding: '0.25rem 0.5rem',
+                                                            fontSize: '0.875rem'
+                                                        }}
+                                                    >
+                                                        <RefreshCw size={14} />
+                                                        Retry
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
@@ -2294,11 +2578,22 @@ function MarketingDashboard() {
     // Template Management Functions - Save to Firebase
     const handleSaveTemplate = async (templateData) => {
         try {
-            await firebaseService.templates.create(templateData);
+            if (editingTemplate) {
+                // Update existing template
+                await firebaseService.templates.update(editingTemplate.id, templateData);
+                alert('Template updated successfully!');
+            } else {
+                // Create new template
+                await firebaseService.templates.create(templateData);
+                alert('Template created successfully!');
+            }
 
             // Reload templates from Firebase
             const updatedTemplates = await firebaseService.templates.getAll();
             setTemplates(updatedTemplates);
+            
+            // Reset editing state
+            setEditingTemplate(null);
         } catch (error) {
             console.error('Error saving template:', error);
             alert('Failed to save template. Please try again.');
@@ -2329,7 +2624,10 @@ function MarketingDashboard() {
                     <h2>Message Templates ({templates.length})</h2>
                 </div>
                 <div className="page-actions-right">
-                    <button className="btn btn-primary" onClick={() => setShowTemplateModal(true)}>
+                    <button className="btn btn-primary" onClick={() => {
+                        setEditingTemplate(null);
+                        setShowTemplateModal(true);
+                    }}>
                         <Plus size={18} />
                         New Template
                     </button>
@@ -2354,7 +2652,10 @@ function MarketingDashboard() {
                         </div>
                         <h3>No templates yet</h3>
                         <p>Create your first template to speed up your campaigns.</p>
-                        <button className="btn btn-primary" onClick={() => setShowTemplateModal(true)}>
+                        <button className="btn btn-primary" onClick={() => {
+                            setEditingTemplate(null);
+                            setShowTemplateModal(true);
+                        }}>
                             <Plus size={20} />
                             Create Template
                         </button>
@@ -2376,6 +2677,12 @@ function MarketingDashboard() {
                                     }}>
                                         <Send size={16} />
                                     </button>
+                                    <button className="action-btn action-btn-edit" title="Edit Template" onClick={() => {
+                                        setEditingTemplate(template);
+                                        setShowTemplateModal(true);
+                                    }}>
+                                        <Edit size={16} />
+                                    </button>
                                     <button className="action-btn action-btn-delete" title="Delete" onClick={() => handleDeleteTemplate(template.id)}>
                                         <Trash2 size={16} />
                                     </button>
@@ -2392,16 +2699,22 @@ function MarketingDashboard() {
                 </div>
             )}
 
-            {/* Template Creation Modal */}
+            {/* Template Creation/Edit Modal */}
             {showTemplateModal && (
-                <div className="modal-overlay" onClick={() => setShowTemplateModal(false)}>
+                <div className="modal-overlay" onClick={() => {
+                    setShowTemplateModal(false);
+                    setEditingTemplate(null);
+                }}>
                     <div className="modal" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
                             <div>
-                                <h2 className="modal-title">Create Template</h2>
-                                <p className="modal-subtitle">Save a reusable message template</p>
+                                <h2 className="modal-title">{editingTemplate ? 'Edit Template' : 'Create Template'}</h2>
+                                <p className="modal-subtitle">{editingTemplate ? 'Update your message template' : 'Save a reusable message template'}</p>
                             </div>
-                            <button className="modal-close" onClick={() => setShowTemplateModal(false)}>
+                            <button className="modal-close" onClick={() => {
+                                setShowTemplateModal(false);
+                                setEditingTemplate(null);
+                            }}>
                                 <X size={24} />
                             </button>
                         </div>
@@ -2415,26 +2728,48 @@ function MarketingDashboard() {
                                 content: formData.get('content')
                             });
                             setShowTemplateModal(false);
+                            setEditingTemplate(null);
                         }}>
                             <div className="modal-body">
                                 <div className="form-group">
                                     <label>Template Name</label>
-                                    <input type="text" name="name" className="form-input" placeholder="e.g., Welcome Email" required />
+                                    <input 
+                                        type="text" 
+                                        name="name" 
+                                        className="form-input" 
+                                        placeholder="e.g., Welcome Email" 
+                                        defaultValue={editingTemplate?.name || ''}
+                                        required 
+                                    />
                                 </div>
                                 <div className="form-group">
                                     <label>Type</label>
-                                    <select name="type" className="form-input" required>
+                                    <select name="type" className="form-input" required defaultValue={editingTemplate?.type || ''}>
+                                        <option value="">Select type...</option>
                                         <option value="email">Email</option>
                                         <option value="whatsapp">WhatsApp</option>
                                     </select>
                                 </div>
                                 <div className="form-group">
                                     <label>Subject (for Email)</label>
-                                    <input type="text" name="subject" className="form-input" placeholder="Email subject line" />
+                                    <input 
+                                        type="text" 
+                                        name="subject" 
+                                        className="form-input" 
+                                        placeholder="Email subject line" 
+                                        defaultValue={editingTemplate?.subject || ''}
+                                    />
                                 </div>
                                 <div className="form-group">
                                     <label>Message Content</label>
-                                    <textarea name="content" className="form-textarea" placeholder="Your message content..." rows={6} required />
+                                    <textarea 
+                                        name="content" 
+                                        className="form-textarea" 
+                                        placeholder="Your message content..." 
+                                        rows={6} 
+                                        defaultValue={editingTemplate?.content || ''}
+                                        required 
+                                    />
                                 </div>
                                 <div className="personalization-hint">
                                     <Zap size={16} />
@@ -2442,10 +2777,19 @@ function MarketingDashboard() {
                                 </div>
                             </div>
                             <div className="modal-footer">
-                                <button type="button" className="btn btn-secondary" onClick={() => setShowTemplateModal(false)}>Cancel</button>
+                                <button 
+                                    type="button" 
+                                    className="btn btn-secondary" 
+                                    onClick={() => {
+                                        setShowTemplateModal(false);
+                                        setEditingTemplate(null);
+                                    }}
+                                >
+                                    Cancel
+                                </button>
                                 <button type="submit" className="btn btn-primary">
                                     <Save size={18} />
-                                    Save Template
+                                    {editingTemplate ? 'Update Template' : 'Save Template'}
                                 </button>
                             </div>
                         </form>

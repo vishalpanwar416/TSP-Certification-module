@@ -133,6 +133,15 @@ export const campaignsAPI = {
     },
 
     /**
+     * Retry failed messages from a campaign
+     */
+    async retry(id) {
+        return apiRequest(`/marketing/campaigns/${id}/retry`, {
+            method: 'POST',
+        });
+    },
+
+    /**
      * Cancel a scheduled campaign
      */
     async cancel(id) {

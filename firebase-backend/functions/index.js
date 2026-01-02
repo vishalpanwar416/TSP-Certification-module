@@ -275,11 +275,23 @@ app.post('/certificates', async (req, res) => {
         };
 
         // Get certificate template URL from Firestore
+        // Try to get default template from certificate_templates first
         let templateUrl = null;
         try {
+            // First try to get default template from certificate_templates
+            const defaultTemplateSnapshot = await db.collection('certificate_templates')
+                .where('is_default', '==', true)
+                .limit(1)
+                .get();
+            
+            if (!defaultTemplateSnapshot.empty) {
+                templateUrl = defaultTemplateSnapshot.docs[0].data().url;
+            } else {
+                // Fallback to legacy single template
             const templateDoc = await db.collection('certificate_settings').doc('template').get();
             if (templateDoc.exists && templateDoc.data().url) {
                 templateUrl = templateDoc.data().url;
+                }
             }
         } catch (error) {
             console.warn('Could not fetch certificate template, using default:', error.message);
@@ -533,16 +545,160 @@ app.get('/certificates/template', async (req, res) => {
 });
 
 /**
- * Delete certificate template
+ * Proxy certificate template image with CORS headers
+ * This endpoint serves the image with proper CORS headers to avoid tainted canvas issues
  */
-app.delete('/certificates/template', async (req, res) => {
+app.get('/certificates/template/image', async (req, res) => {
     try {
-        const doc = await db.collection('certificate_settings').doc('template').get();
+        const { id } = req.query;
+        let templateDoc;
+        let templateUrl;
+        let storagePath;
+        
+        // If ID is provided, get specific template
+        if (id) {
+            templateDoc = await db.collection('certificate_templates').doc(id).get();
+            if (!templateDoc.exists) {
+                return res.status(404).json({
+                    error: 'Template not found'
+                });
+            }
+            const templateData = templateDoc.data();
+            templateUrl = templateData.url;
+            storagePath = templateData.storage_path;
+        } else {
+            // Get default template
+            const defaultTemplateSnapshot = await db.collection('certificate_templates')
+                .where('is_default', '==', true)
+                .limit(1)
+                .get();
+            
+            if (!defaultTemplateSnapshot.empty) {
+                const defaultData = defaultTemplateSnapshot.docs[0].data();
+                templateUrl = defaultData.url;
+                storagePath = defaultData.storage_path;
+            } else {
+                // Fallback to legacy template
+                templateDoc = await db.collection('certificate_settings').doc('template').get();
+                if (!templateDoc.exists || !templateDoc.data().url) {
+                    return res.status(404).json({
+                        error: 'No template found'
+                    });
+                }
+                templateUrl = templateDoc.data().url;
+                storagePath = templateDoc.data().storage_path;
+            }
+        }
+        
+        // Try to get image from Firebase Storage directly (better performance)
+        try {
+            const bucket = await getStorageBucket();
+            let file;
+            
+            if (storagePath) {
+                file = bucket.file(storagePath);
+            } else {
+                // Try to extract path from URL
+                const urlMatch = templateUrl.match(/\/o\/([^?]+)/);
+                if (urlMatch) {
+                    file = bucket.file(decodeURIComponent(urlMatch[1]));
+                } else {
+                    throw new Error('Could not determine storage path');
+                }
+            }
+            
+            const [exists] = await file.exists();
+            if (!exists) {
+                throw new Error('File does not exist in storage');
+            }
+            
+            // Get file metadata
+            const [metadata] = await file.getMetadata();
+            const contentType = metadata.contentType || 'image/jpeg';
+            
+            // Create a read stream
+            const stream = file.createReadStream();
+            
+            // Set CORS headers
+            res.set('Access-Control-Allow-Origin', '*');
+            res.set('Access-Control-Allow-Methods', 'GET');
+            res.set('Content-Type', contentType);
+            res.set('Cache-Control', 'public, max-age=3600');
+            
+            // Pipe the stream to response
+            stream.pipe(res);
+            
+            stream.on('error', (error) => {
+                console.error('Stream error:', error);
+                if (!res.headersSent) {
+                    res.status(500).json({
+                        error: 'Failed to stream image',
+                        details: error.message
+                    });
+                }
+            });
+        } catch (storageError) {
+            console.warn('Storage access failed, trying HTTP fetch:', storageError.message);
+            
+            // Fallback: Use node-fetch if available
+            const fetch = require('node-fetch');
+            try {
+                const response = await fetch(templateUrl);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch image: ${response.status}`);
+                }
+                
+                // node-fetch v2 uses .buffer() method
+                const imageBuffer = await response.buffer();
+                const contentType = response.headers.get('content-type') || 'image/jpeg';
+                
+                // Set CORS headers
+                res.set('Access-Control-Allow-Origin', '*');
+                res.set('Access-Control-Allow-Methods', 'GET');
+                res.set('Content-Type', contentType);
+                res.set('Cache-Control', 'public, max-age=3600');
+                
+                res.send(imageBuffer);
+            } catch (fetchError) {
+                console.error('HTTP fetch also failed:', fetchError);
+                if (!res.headersSent) {
+                    res.status(500).json({
+                        error: 'Failed to fetch template image',
+                        details: fetchError.message
+                    });
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error in template image proxy:', error);
+        res.status(500).json({
+            error: 'Failed to proxy template image',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Delete certificate template by ID
+ */
+app.delete('/certificates/template/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                error: 'Template ID is required'
+            });
+        }
+
+        const doc = await db.collection('certificate_templates').doc(id).get();
 
         if (!doc.exists) {
-            return res.json({
-                success: true,
-                message: 'No template to delete'
+            return res.status(404).json({
+                success: false,
+                error: 'Template not found',
+                message: `Template with ID ${id} does not exist`
             });
         }
 
@@ -564,7 +720,7 @@ app.delete('/certificates/template', async (req, res) => {
         }
 
         // Delete from Firestore
-        await db.collection('certificate_settings').doc('template').delete();
+        await db.collection('certificate_templates').doc(id).delete();
 
         res.json({
             success: true,
@@ -574,6 +730,60 @@ app.delete('/certificates/template', async (req, res) => {
         console.error('Error deleting certificate template:', error);
         res.status(500).json({
             error: 'Failed to delete certificate template',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Set default template
+ */
+app.post('/certificates/template/:id/set-default', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        if (!id) {
+            return res.status(400).json({
+                success: false,
+                error: 'Template ID is required'
+            });
+        }
+
+        const doc = await db.collection('certificate_templates').doc(id).get();
+
+        if (!doc.exists) {
+            return res.status(404).json({
+                success: false,
+                error: 'Template not found'
+            });
+        }
+
+        // Remove default flag from all templates
+        const allTemplates = await db.collection('certificate_templates').get();
+        const batch = db.batch();
+        
+        allTemplates.forEach(templateDoc => {
+            batch.update(templateDoc.ref, { is_default: false });
+        });
+        
+        // Set this template as default
+        batch.update(doc.ref, { is_default: true });
+        
+        await batch.commit();
+
+        res.json({
+            success: true,
+            message: 'Default template updated successfully',
+            data: {
+                id: doc.id,
+                ...doc.data(),
+                is_default: true
+            }
+        });
+    } catch (error) {
+        console.error('Error setting default template:', error);
+        res.status(500).json({
+            error: 'Failed to set default template',
             details: error.message
         });
     }
@@ -1648,22 +1858,88 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                     if (certificateAttachment) {
                         try {
                             const certResult = await getOrCreateCertificateForContact(contact, certificateAttachment);
-                            if (certResult) {
+                            if (certResult && certResult.url) {
                                 mediaUrl = certResult.url;
-                                filename = certResult.filename;
+                                filename = certResult.filename || filename;
+                                console.log(`✅ Certificate generated for ${contact.name}: ${mediaUrl}`);
+                            } else {
+                                console.warn(`⚠️ Certificate generation returned no URL for ${contact.name}. Sending message without certificate.`);
+                                // Reset to null to ensure it's defined
+                                mediaUrl = null;
                             }
                         } catch (certError) {
                             console.error(`Error getting certificate for ${contact.id}:`, certError);
-                            // Continue sending without certificate if generation fails
-                            errors.push({ contactId: contact.id, contact: contact.phone, error: `Certificate generation failed: ${certError.message}` });
+                            // Log error but continue sending message without certificate
+                            errors.push({ contactId: contact.id, contact: contact.phone, error: `Certificate generation failed: ${certError.message}. Message sent without certificate.` });
+                            // Ensure mediaUrl is null (not undefined)
+                            mediaUrl = null;
                         }
                     }
 
-                    const result = await sendBulkWhatsApp(contact.phone, personalizedMessage, mediaUrl, filename, whatsappCampaign);
+                    // Ensure mediaUrl is either a valid URL string or null (never undefined)
+                    const finalMediaUrl = (mediaUrl && typeof mediaUrl === 'string') ? mediaUrl : null;
+                    const finalFilename = (filename && typeof filename === 'string') ? filename : 'certificate.pdf';
+
+                    // Validate message is not empty after personalization (for WhatsApp, only if no media)
+                    // Allow messages with content even if they have trailing newlines
+                    if (!finalMediaUrl) {
+                        if (!personalizedMessage || typeof personalizedMessage !== 'string') {
+                            console.warn(`Skipping WhatsApp message to ${contact.phone}: Message is null or invalid`);
+                            failedCount++;
+                            errors.push({ 
+                                contactId: contact.id, 
+                                contact: contact.phone, 
+                                error: 'Message is invalid after personalization.' 
+                            });
+                            continue;
+                        }
+                        // Check if message has any non-whitespace content
+                        // This allows messages like "John\n" (name followed by newline)
+                        const hasContent = personalizedMessage.replace(/\s/g, '').length > 0;
+                        if (!hasContent) {
+                            console.warn(`Skipping WhatsApp message to ${contact.phone}: Message is empty after personalization`);
+                            failedCount++;
+                            errors.push({ 
+                                contactId: contact.id, 
+                                contact: contact.phone, 
+                                error: 'Message is empty after personalization. Please ensure your message has content after placeholders are replaced.' 
+                            });
+                            continue;
+                        }
+                    }
+
+                    console.log(`📤 Sending WhatsApp to ${contact.phone}${finalMediaUrl ? ` with media: ${finalMediaUrl}` : ' (text only)'}`);
+                    console.log(`📋 Media URL type: ${typeof finalMediaUrl}, value: ${finalMediaUrl}`);
+
+                    // Double-check that finalMediaUrl is never undefined before passing
+                    const safeMediaUrl = (finalMediaUrl !== undefined && finalMediaUrl !== null) ? finalMediaUrl : null;
+                    const safeFilename = (finalFilename !== undefined && finalFilename !== null) ? finalFilename : 'certificate.pdf';
+
+                    const result = await sendBulkWhatsApp(contact.phone, personalizedMessage, safeMediaUrl, safeFilename, whatsappCampaign);
 
                     // Verify the message was actually sent
-                    if (result && result.success !== false) {
+                    // Check for explicit failure first
+                    if (result && result.success === false) {
+                        console.error(`❌ WhatsApp message explicitly failed for ${contact.phone}:`, result);
+                        const errorMsg = result.error || result.message || result.warning || 'Message send failed';
+                        throw new Error(errorMsg);
+                    }
+
+                    // If we have a warning, log it - this indicates the message might not have been sent
+                    if (result?.warning) {
+                        console.warn(`⚠️ WhatsApp message warning for ${contact.phone}:`, result.warning);
+                        // If there's a warning about missing success indicator, treat as failure
+                        if (result.warning.includes('lacks clear success indicator')) {
+                            console.error(`❌ Message likely not sent due to missing success indicator`);
+                            throw new Error(result.warning);
+                        }
+                    }
+
+                    // Check for success - must have explicit success === true
+                    // Don't be lenient - if AiSensy doesn't confirm, it likely didn't send
+                    if (result && result.success === true) {
                         sentCount++;
+                        console.log(`✅ WhatsApp message confirmed sent to ${contact.phone}${result?.messageId ? ` (ID: ${result.messageId})` : ''}${result?.status ? ` (Status: ${result.status})` : ''}`);
 
                         // Update contact stats
                         const contactRef = db.collection('marketing_contacts').doc(contact.id);
@@ -1673,12 +1949,33 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                             last_contact_type: 'whatsapp'
                         });
                     } else {
-                        throw new Error(result?.error || 'Message send failed');
+                        // No clear success - treat as failure
+                        console.error(`❌ WhatsApp message send verification failed for ${contact.phone}`);
+                        console.error(`❌ Result:`, JSON.stringify(result, null, 2));
+                        throw new Error(result?.error || result?.warning || 'Message send failed - AiSensy did not confirm delivery');
                     }
                 } catch (error) {
                     console.error(`Failed to send WhatsApp to ${contact.phone}:`, error);
+                    console.error(`Error stack:`, error.stack);
+                    
+                    // Safely log error details without referencing variables that might not be in scope
+                    try {
+                        console.error(`Error details:`, {
+                            message: error.message,
+                            name: error.name,
+                            contactId: contact.id,
+                            contactPhone: contact.phone,
+                            hasCertificateAttachment: !!certificateAttachment
+                        });
+                    } catch (logError) {
+                        // If logging fails, just log the basic error
+                        console.error(`Error occurred (logging details failed):`, error.message);
+                    }
+                    
                     failedCount++;
-                    errors.push({ contactId: contact.id, contact: contact.phone, error: error.message });
+                    // Ensure error message is safe and doesn't reference undefined variables
+                    const errorMessage = error.message || error.toString() || 'Unknown error occurred';
+                    errors.push({ contactId: contact.id, contact: contact.phone, error: errorMessage });
                 }
             } else {
                 // No valid contact method
@@ -1711,14 +2008,45 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
         campaignStatus = 'partial';
     }
 
+    // Get current campaign to check if this is a retry
+    const campaignDoc = await db.collection('marketing_campaigns').doc(campaignId).get();
+    const currentCampaign = campaignDoc.exists ? campaignDoc.data() : null;
+    const isRetry = currentCampaign && currentCampaign.sent_count > 0;
+
+    // For retries, add to existing counts; otherwise set new counts
+    const finalSentCount = isRetry ? (currentCampaign.sent_count || 0) + sentCount : sentCount;
+    const finalFailedCount = isRetry ? Math.max(0, (currentCampaign.failed_count || 0) - errors.length + failedCount) : failedCount;
+
+    // Merge errors: remove retried contacts from errors, add new failures
+    let finalErrors = errors;
+    if (isRetry && currentCampaign.errors && Array.isArray(currentCampaign.errors)) {
+        // Remove contacts that were retried (whether they succeeded or failed again)
+        const retriedContactIds = new Set(contacts.map(c => c.id));
+        const remainingErrors = currentCampaign.errors.filter(e => !retriedContactIds.has(e.contactId));
+        // Add new failures
+        finalErrors = [...remainingErrors, ...errors];
+    }
+
+    // Determine final status
+    let finalStatus = campaignStatus;
+    if (isRetry) {
+        if (finalFailedCount === 0) {
+            finalStatus = 'completed';
+        } else if (finalSentCount > 0) {
+            finalStatus = 'partial';
+        } else {
+            finalStatus = 'failed';
+        }
+    }
+
     // Update campaign status
     await db.collection('marketing_campaigns').doc(campaignId).update({
-        status: campaignStatus,
-        sent_count: sentCount,
-        failed_count: failedCount,
-        sent_at: sentCount > 0 ? FieldValue.serverTimestamp() : null,
+        status: finalStatus,
+        sent_count: finalSentCount,
+        failed_count: finalFailedCount,
+        sent_at: finalSentCount > 0 ? FieldValue.serverTimestamp() : currentCampaign?.sent_at || null,
         updated_at: FieldValue.serverTimestamp(),
-        errors: errors.length > 0 ? errors : FieldValue.delete()
+        errors: finalErrors.length > 0 ? finalErrors : FieldValue.delete()
     });
 
     return { sentCount, failedCount, errors };
@@ -1759,7 +2087,8 @@ app.post('/marketing/campaigns/:id/send', async (req, res) => {
             campaign.subject,
             campaign.message,
             contacts,
-            certificateAttachment
+            certificateAttachment,
+            campaign.whatsapp_campaign
         );
 
         res.json({
@@ -1770,6 +2099,91 @@ app.post('/marketing/campaigns/:id/send', async (req, res) => {
     } catch (error) {
         console.error('Error sending campaign:', error);
         res.status(500).json({ error: 'Failed to send campaign', details: error.message });
+    }
+});
+
+/**
+ * Retry failed messages from a campaign
+ */
+app.post('/marketing/campaigns/:id/retry', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const doc = await db.collection('marketing_campaigns').doc(id).get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Campaign not found' });
+        }
+
+        const campaign = { id: doc.id, ...doc.data() };
+
+        // Check if there are any failed messages to retry
+        const failedCount = campaign.failed_count || campaign.failedCount || 0;
+        if (failedCount === 0) {
+            return res.status(400).json({ error: 'No failed messages to retry' });
+        }
+
+        // Get failed contact IDs from errors array
+        const errors = campaign.errors || [];
+        if (errors.length === 0) {
+            return res.status(400).json({ error: 'No error details found. Cannot retry specific contacts.' });
+        }
+
+        const failedContactIds = errors
+            .map(e => e.contactId)
+            .filter(id => id); // Remove any null/undefined IDs
+
+        if (failedContactIds.length === 0) {
+            return res.status(400).json({ error: 'No valid contact IDs found in errors' });
+        }
+
+        console.log(`🔄 Retrying ${failedContactIds.length} failed messages for campaign ${id}`);
+
+        // Fetch only the failed contacts
+        const contactsPromises = failedContactIds.map(cid =>
+            db.collection('marketing_contacts').doc(cid).get()
+        );
+        const contactDocs = await Promise.all(contactsPromises);
+        const failedContacts = contactDocs
+            .filter(d => d.exists)
+            .map(d => ({ id: d.id, ...d.data() }));
+
+        if (failedContacts.length === 0) {
+            return res.status(400).json({ error: 'No valid contacts found for retry' });
+        }
+
+        const certificateAttachment = campaign.certificate_attachment || null;
+
+        // Retry sending to failed contacts
+        const result = await sendCampaignMessages(
+            id,
+            campaign.type,
+            campaign.subject,
+            campaign.message,
+            failedContacts,
+            certificateAttachment,
+            campaign.whatsapp_campaign
+        );
+
+        // Update campaign with new results (add to existing counts)
+        const updatedDoc = await db.collection('marketing_campaigns').doc(id).get();
+        const updatedCampaign = { id: updatedDoc.id, ...updatedDoc.data() };
+
+        res.json({
+            success: true,
+            message: `Retry completed. Sent ${result.sentCount} messages, ${result.failedCount} failed.`,
+            data: {
+                retryResults: result,
+                campaign: {
+                    id: updatedCampaign.id,
+                    sent_count: updatedCampaign.sent_count || 0,
+                    failed_count: updatedCampaign.failed_count || 0,
+                    status: updatedCampaign.status
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Error retrying campaign:', error);
+        res.status(500).json({ error: 'Failed to retry campaign', details: error.message });
     }
 });
 
@@ -2217,6 +2631,7 @@ app.get('/notifications/unread-count', async (req, res) => {
 async function getOrCreateCertificateForContact(contact, attachment) {
     const formats = attachment.formats || { pdf: true, jpg: false };
     // Prefer JPG for campaigns if requested (better for WhatsApp/Social)
+    // If both formats are selected, prioritize JPG for WhatsApp
     const useJpg = formats.jpg === true;
     const extension = useJpg ? 'jpg' : 'pdf';
 
@@ -2225,6 +2640,65 @@ async function getOrCreateCertificateForContact(contact, attachment) {
         const certDoc = await db.collection('certificates').doc(attachment.certificateId).get();
         if (certDoc.exists) {
             const certData = certDoc.data();
+            
+            // If JPG is requested but doesn't exist, generate it
+            if (useJpg && !certData.jpg_url) {
+                console.log(`JPG requested but not found for certificate ${attachment.certificateId}, generating JPG version...`);
+                
+                // Generate JPG from the certificate data
+                const certificateData = {
+                    recipient_name: certData.recipient_name || contact.name || 'Recipient',
+                    certificate_number: certData.certificate_number || `CERT-${Date.now()}`,
+                    award_rera_number: certData.award_rera_number || contact.rera_awarde_no || contact.reraAwardeNo || null,
+                    professional: certData.professional || contact.professional || null,
+                    phone_number: certData.phone_number || contact.phone || null,
+                    email: certData.email || contact.email || null
+                };
+
+                // Get template URL
+                let templateUrl = null;
+                try {
+                    const defaultTemplateSnapshot = await db.collection('certificate_templates')
+                        .where('is_default', '==', true)
+                        .limit(1)
+                        .get();
+                    
+                    if (!defaultTemplateSnapshot.empty) {
+                        templateUrl = defaultTemplateSnapshot.docs[0].data().url;
+                    } else {
+                        const templateDoc = await db.collection('certificate_settings').doc('template').get();
+                        if (templateDoc.exists && templateDoc.data().url) {
+                            templateUrl = templateDoc.data().url;
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Could not fetch certificate template:', error.message);
+                }
+
+                // Generate JPG (generateCertificateImage is already imported at the top)
+                const jpgBuffer = await generateCertificateImage(certificateData, templateUrl);
+
+                // Upload JPG to storage
+                const bucket = await getStorageBucket();
+                const jpgFile = bucket.file(`certificates/${certDoc.id}.jpg`);
+                await jpgFile.save(jpgBuffer, {
+                    metadata: {
+                        contentType: 'image/jpeg',
+                    }
+                });
+                await jpgFile.makePublic();
+                const jpgUrl = `https://storage.googleapis.com/${bucket.name}/certificates/${certDoc.id}.jpg`;
+
+                // Update certificate document with JPG URL
+                await certDoc.ref.update({ jpg_url: jpgUrl });
+
+                return {
+                    url: jpgUrl,
+                    filename: `certificate_${certData.certificate_number || certDoc.id}.jpg`
+                };
+            }
+            
+            // Use existing URL (JPG if available and requested, otherwise PDF)
             const url = useJpg ? (certData.jpg_url || certData.pdf_url) : certData.pdf_url;
             return {
                 url,
@@ -2283,10 +2757,25 @@ async function getOrCreateCertificateForContact(contact, attachment) {
     };
 
     // Get template URL
+    // Try to get default template from certificate_templates first
     let templateUrl = null;
-    const templateDoc = await db.collection('certificate_settings').doc('template').get();
-    if (templateDoc.exists && templateDoc.data().url) {
-        templateUrl = templateDoc.data().url;
+    try {
+        const defaultTemplateSnapshot = await db.collection('certificate_templates')
+            .where('is_default', '==', true)
+            .limit(1)
+            .get();
+        
+        if (!defaultTemplateSnapshot.empty) {
+            templateUrl = defaultTemplateSnapshot.docs[0].data().url;
+        } else {
+            // Fallback to legacy single template
+            const templateDoc = await db.collection('certificate_settings').doc('template').get();
+            if (templateDoc.exists && templateDoc.data().url) {
+                templateUrl = templateDoc.data().url;
+            }
+        }
+    } catch (error) {
+        console.warn('Could not fetch certificate template, using default:', error.message);
     }
 
     const buffer = useJpg
@@ -2392,7 +2881,7 @@ app.get('/marketing/config/status', async (req, res) => {
 });
 
 /**
- * Upload certificate template
+ * Upload certificate template (supports multiple templates)
  */
 app.post('/certificates/template', async (req, res) => {
     try {
@@ -2405,7 +2894,7 @@ app.post('/certificates/template', async (req, res) => {
             });
         }
 
-        const { image, filename, contentType } = req.body;
+        const { image, filename, contentType, templateName, templateId } = req.body;
 
         if (!image) {
             return res.status(400).json({
@@ -2464,7 +2953,12 @@ app.post('/certificates/template', async (req, res) => {
             }
         }
 
-        const storageFileName = `certificate-templates/template.${fileExtension}`;
+        // Generate template ID if not provided
+        const finalTemplateId = templateId || uuidv4();
+        const finalTemplateName = templateName || filename || `Template ${Date.now()}`;
+        
+        // Use template ID in storage path to support multiple templates
+        const storageFileName = `certificate-templates/${finalTemplateId}.${fileExtension}`;
 
         // Upload to Firebase Storage
         let bucket;
@@ -2514,11 +3008,13 @@ app.post('/certificates/template', async (req, res) => {
         console.log('Uploading to storage:', {
             bucket: bucket.name,
             fileName: storageFileName,
+            templateId: finalTemplateId,
+            templateName: finalTemplateName,
             fileSize: imageBuffer.length,
             contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`
         });
 
-        // Delete existing template if it exists (to avoid conflicts)
+        // Delete existing template file if it exists (for updates)
         try {
             const existingFile = bucket.file(storageFileName);
             const [exists] = await existingFile.exists();
@@ -2580,9 +3076,27 @@ app.post('/certificates/template', async (req, res) => {
 
         console.log('Public URL:', publicUrl);
 
-        // Save template info to Firestore
+        // Save template info to Firestore in certificate_templates collection
         try {
             const templateData = {
+                id: finalTemplateId,
+                name: finalTemplateName,
+                url: publicUrl,
+                filename: filename || `template.${fileExtension}`,
+                contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`,
+                storage_path: storageFileName,
+                bucket_name: bucket.name,
+                is_default: false, // Can be set to true for default template
+                uploaded_at: FieldValue.serverTimestamp(),
+                updated_at: FieldValue.serverTimestamp()
+            };
+
+            // Save to certificate_templates collection
+            await db.collection('certificate_templates').doc(finalTemplateId).set(templateData, { merge: true });
+            console.log('Template info saved to Firestore successfully');
+            
+            // Also update the legacy single template for backward compatibility
+            await db.collection('certificate_settings').doc('template').set({
                 url: publicUrl,
                 filename: filename || `template.${fileExtension}`,
                 contentType: contentType || `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`,
@@ -2590,10 +3104,7 @@ app.post('/certificates/template', async (req, res) => {
                 bucket_name: bucket.name,
                 uploaded_at: FieldValue.serverTimestamp(),
                 updated_at: FieldValue.serverTimestamp()
-            };
-
-            await db.collection('certificate_settings').doc('template').set(templateData, { merge: true });
-            console.log('Template info saved to Firestore successfully');
+            }, { merge: true });
         } catch (firestoreError) {
             console.error('Error saving template info to Firestore:', firestoreError);
             // Even if Firestore save fails, the file is uploaded, so we can still return success
@@ -2605,6 +3116,8 @@ app.post('/certificates/template', async (req, res) => {
             success: true,
             message: 'Certificate template uploaded successfully',
             data: {
+                id: finalTemplateId,
+                name: finalTemplateName,
                 url: publicUrl,
                 filename: filename || `template.${fileExtension}`
             }
@@ -2647,10 +3160,83 @@ app.post('/certificates/template', async (req, res) => {
 });
 
 /**
- * Get certificate template
+ * Get all certificate templates
+ */
+app.get('/certificates/templates', async (req, res) => {
+    try {
+        const templatesSnapshot = await db.collection('certificate_templates')
+            .orderBy('uploaded_at', 'desc')
+            .get();
+
+        const templates = [];
+        templatesSnapshot.forEach(doc => {
+            templates.push({
+                id: doc.id,
+                ...doc.data()
+            });
+        });
+
+        res.json({
+            success: true,
+            data: templates,
+            count: templates.length
+        });
+    } catch (error) {
+        console.error('Error fetching certificate templates:', error);
+        res.status(500).json({
+            error: 'Failed to fetch certificate templates',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * Get certificate template by ID (or get default/active template)
  */
 app.get('/certificates/template', async (req, res) => {
     try {
+        const { id } = req.query;
+        
+        // If ID is provided, get specific template
+        if (id) {
+            const doc = await db.collection('certificate_templates').doc(id).get();
+            
+            if (!doc.exists) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Template not found',
+                    message: `Template with ID ${id} does not exist`
+                });
+            }
+
+            return res.json({
+                success: true,
+                data: {
+                    id: doc.id,
+                    ...doc.data()
+                }
+            });
+        }
+        
+        // Otherwise, get default template (for backward compatibility)
+        // First try to get default from certificate_templates
+        const defaultTemplateSnapshot = await db.collection('certificate_templates')
+            .where('is_default', '==', true)
+            .limit(1)
+            .get();
+        
+        if (!defaultTemplateSnapshot.empty) {
+            const defaultDoc = defaultTemplateSnapshot.docs[0];
+            return res.json({
+                success: true,
+                data: {
+                    id: defaultDoc.id,
+                    ...defaultDoc.data()
+                }
+            });
+        }
+        
+        // Fallback to legacy single template
         const doc = await db.collection('certificate_settings').doc('template').get();
 
         if (!doc.exists) {
