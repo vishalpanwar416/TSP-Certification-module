@@ -2141,8 +2141,10 @@ app.post('/marketing/campaigns/:id/send', async (req, res) => {
 
 /**
  * Retry failed messages from a campaign
+ * Route: POST /marketing/campaigns/:id/retry
  */
 app.post('/marketing/campaigns/:id/retry', async (req, res) => {
+    console.log(`🔄 Retry endpoint called for campaign: ${req.params.id}`);
     try {
         const { id } = req.params;
         const doc = await db.collection('marketing_campaigns').doc(id).get();
@@ -3545,6 +3547,607 @@ exports.processScheduledCampaigns = functions.pubsub
             return null;
         }
     });
+
+/**
+ * Webhook endpoint for property listings to social media
+ * POST /api/webhooks/social-media
+ * 
+ * Expected payload:
+ * {
+ *   "type": "property_listing",
+ *   "property": {
+ *     "id": "property_123",
+ *     "title": "Luxury 3BHK Apartment",
+ *     "location": "Mumbai, Maharashtra",
+ *     "price": "₹2.5 Crores",
+ *     "area": "1500 sq ft",
+ *     "bedrooms": 3,
+ *     "bathrooms": 2,
+ *     "description": "Beautiful apartment with modern amenities",
+ *     "imageUrl": "https://example.com/property-image.jpg",
+ *     "propertyUrl": "https://example.com/property/123",
+ *     "reraNumber": "RERA/123/2024" (optional),
+ *     "amenities": ["Parking", "Gym", "Swimming Pool"] (optional)
+ *   },
+ *   "platforms": ["facebook", "twitter", "instagram", "linkedin", "whatsapp"], // Optional, defaults to all
+ *   "postImmediately": true, // Optional, defaults to false (scheduled)
+ *   "scheduledAt": "2024-01-20T10:00:00Z" // Optional, if postImmediately is false
+ * }
+ */
+app.post('/api/webhooks/social-media', async (req, res) => {
+    try {
+        const { type, property, platforms, postImmediately, scheduledAt, webhookSecret } = req.body;
+
+        // Verify webhook secret (optional but recommended)
+        const expectedSecret = functions.config().webhook?.secret;
+        if (expectedSecret && webhookSecret !== expectedSecret) {
+            return res.status(401).json({ 
+                error: 'Invalid webhook secret',
+                message: 'Webhook authentication failed'
+            });
+        }
+
+        // Validate request
+        if (!type || type !== 'property_listing') {
+            return res.status(400).json({ 
+                error: 'Invalid type',
+                message: 'Expected type: "property_listing"'
+            });
+        }
+
+        if (!property) {
+            return res.status(400).json({ 
+                error: 'Property data required',
+                message: 'Property object is required in the request body'
+            });
+        }
+
+        // Validate required property fields
+        const requiredFields = ['title', 'location', 'price'];
+        const missingFields = requiredFields.filter(field => !property[field]);
+        if (missingFields.length > 0) {
+            return res.status(400).json({ 
+                error: 'Missing required fields',
+                message: `Missing fields: ${missingFields.join(', ')}`,
+                missingFields
+            });
+        }
+
+        // Format property data into social media post content
+        const postContent = formatPropertyPost(property);
+        
+        // Determine platforms (default to all if not specified)
+        const targetPlatforms = platforms && Array.isArray(platforms) && platforms.length > 0 
+            ? platforms 
+            : ['facebook', 'twitter', 'instagram', 'linkedin', 'whatsapp'];
+
+        // Determine posting time
+        const shouldPostNow = postImmediately === true;
+        const postTime = shouldPostNow 
+            ? new Date().toISOString() 
+            : (scheduledAt || new Date(Date.now() + 3600000).toISOString()); // Default to 1 hour from now
+
+        // Create social media post
+        const postId = uuidv4();
+        const postData = {
+            id: postId,
+            content: postContent,
+            platforms: targetPlatforms,
+            scheduledDate: postTime,
+            publishedDate: shouldPostNow ? postTime : null,
+            status: shouldPostNow ? 'published' : 'scheduled',
+            image: property.imageUrl || null,
+            source: 'webhook',
+            webhookId: `wh_${Date.now()}`,
+            receivedAt: new Date().toISOString(),
+            propertyData: {
+                propertyId: property.id,
+                title: property.title,
+                location: property.location,
+                price: property.price,
+                propertyUrl: property.propertyUrl || null
+            },
+            insights: null
+        };
+
+        // Save to Firestore with proper field names
+        await db.collection('social_media_posts').doc(postId).set({
+            content: postData.content,
+            platforms: postData.platforms,
+            scheduled_date: postData.scheduledDate,
+            published_date: postData.publishedDate,
+            status: postData.status,
+            image: postData.image,
+            image_url: postData.image,
+            source: postData.source,
+            webhook_id: postData.webhookId,
+            received_at: postData.receivedAt,
+            property_data: postData.propertyData,
+            insights: postData.insights,
+            created_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
+        });
+
+        // If posting immediately, trigger social media posting
+        if (shouldPostNow) {
+            // TODO: Implement actual social media posting logic here
+            // This would call the respective platform APIs
+            console.log(`[Webhook] Posting property listing to platforms: ${targetPlatforms.join(', ')}`);
+        }
+
+        console.log(`[Webhook] Property listing received and processed: ${property.title}`);
+
+        res.status(200).json({
+            success: true,
+            message: shouldPostNow ? 'Property posted to social media' : 'Property scheduled for posting',
+            postId: postId,
+            post: postData
+        });
+
+    } catch (error) {
+        console.error('[Webhook Error]', error);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            message: error.message,
+            details: error.stack
+        });
+    }
+});
+
+/**
+ * Format property data into social media post content
+ */
+function formatPropertyPost(property) {
+    const {
+        title,
+        location,
+        price,
+        area,
+        bedrooms,
+        bathrooms,
+        description,
+        propertyUrl,
+        reraNumber,
+        amenities
+    } = property;
+
+    // Base post content
+    let post = `🏠 NEW PROPERTY LISTING\n\n`;
+    post += `📍 ${title}\n`;
+    post += `📍 Location: ${location}\n`;
+    post += `💰 Price: ${price}\n`;
+
+    if (area) {
+        post += `📐 Area: ${area}\n`;
+    }
+
+    if (bedrooms || bathrooms) {
+        const bedBath = [];
+        if (bedrooms) bedBath.push(`${bedrooms} BHK`);
+        if (bathrooms) bedBath.push(`${bathrooms} Bath`);
+        if (bedBath.length > 0) {
+            post += `🛏️ ${bedBath.join(' | ')}\n`;
+        }
+    }
+
+    if (description) {
+        post += `\n${description}\n`;
+    }
+
+    if (amenities && Array.isArray(amenities) && amenities.length > 0) {
+        post += `\n✨ Amenities: ${amenities.slice(0, 5).join(', ')}`;
+        if (amenities.length > 5) {
+            post += ` +${amenities.length - 5} more`;
+        }
+        post += `\n`;
+    }
+
+    if (reraNumber) {
+        post += `\n🏆 RERA: ${reraNumber}\n`;
+    }
+
+    post += `\n🔗 View Details: ${propertyUrl || 'Contact us for more information'}\n`;
+
+    // Add hashtags
+    const hashtags = [
+        '#RealEstate',
+        '#PropertyListing',
+        '#NewListing',
+        location ? `#${location.replace(/\s+/g, '')}` : null,
+        '#PropertyForSale',
+        '#RealEstateInvestment'
+    ].filter(Boolean).join(' ');
+
+    post += `\n${hashtags}`;
+
+    return post;
+}
+
+/**
+ * Social Media Posts API Endpoints
+ */
+
+/**
+ * Get all social media posts
+ * GET /api/social-media/posts
+ */
+app.get('/api/social-media/posts', async (req, res) => {
+    try {
+        const { platform, status, source } = req.query;
+        
+        let query = db.collection('social_media_posts');
+
+        if (platform && platform !== 'all') {
+            query = query.where('platforms', 'array-contains', platform);
+        }
+
+        if (status && status !== 'all') {
+            query = query.where('status', '==', status);
+        }
+
+        if (source) {
+            query = query.where('source', '==', source);
+        }
+
+        query = query.orderBy('created_at', 'desc');
+
+        const snapshot = await query.get();
+        const posts = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+
+        res.json({ success: true, data: posts });
+    } catch (error) {
+        console.error('[Social Media API] Error fetching posts:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch posts',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Get post by ID
+ * GET /api/social-media/posts/:id
+ */
+app.get('/api/social-media/posts/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const doc = await db.collection('social_media_posts').doc(id).get();
+        
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Post not found' });
+        }
+
+        res.json({ 
+            success: true, 
+            data: { id: doc.id, ...doc.data() } 
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error fetching post:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch post',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Create a new post
+ * POST /api/social-media/posts
+ */
+app.post('/api/social-media/posts', async (req, res) => {
+    try {
+        const { content, platforms, scheduledAt, imageUrl, postImmediately } = req.body;
+
+        if (!content || !platforms || !Array.isArray(platforms) || platforms.length === 0) {
+            return res.status(400).json({ 
+                error: 'Content and platforms are required' 
+            });
+        }
+
+        const postId = uuidv4();
+        const postTime = postImmediately 
+            ? new Date().toISOString() 
+            : (scheduledAt || new Date(Date.now() + 3600000).toISOString());
+
+        const postData = {
+            content,
+            platforms,
+            scheduled_date: postTime,
+            published_date: postImmediately ? postTime : null,
+            status: postImmediately ? 'published' : 'scheduled',
+            image: imageUrl || null,
+            image_url: imageUrl || null,
+            source: 'manual',
+            insights: null,
+            created_at: FieldValue.serverTimestamp(),
+            updated_at: FieldValue.serverTimestamp()
+        };
+
+        await db.collection('social_media_posts').doc(postId).set(postData);
+
+        res.status(201).json({
+            success: true,
+            message: postImmediately ? 'Post published successfully' : 'Post scheduled successfully',
+            data: { id: postId, ...postData }
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error creating post:', error);
+        res.status(500).json({ 
+            error: 'Failed to create post',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Update a post
+ * PUT /api/social-media/posts/:id
+ */
+app.put('/api/social-media/posts/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const updates = req.body;
+
+        // Convert frontend field names to Firestore field names
+        const firestoreUpdates = {};
+        if (updates.content) firestoreUpdates.content = updates.content;
+        if (updates.platforms) firestoreUpdates.platforms = updates.platforms;
+        if (updates.scheduledDate) firestoreUpdates.scheduled_date = updates.scheduledDate;
+        if (updates.publishedDate) firestoreUpdates.published_date = updates.publishedDate;
+        if (updates.status) firestoreUpdates.status = updates.status;
+        if (updates.image !== undefined) {
+            firestoreUpdates.image = updates.image;
+            firestoreUpdates.image_url = updates.image;
+        }
+        if (updates.insights) firestoreUpdates.insights = updates.insights;
+        
+        firestoreUpdates.updated_at = FieldValue.serverTimestamp();
+
+        await db.collection('social_media_posts').doc(id).update(firestoreUpdates);
+
+        res.json({
+            success: true,
+            message: 'Post updated successfully',
+            data: { id, ...updates }
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error updating post:', error);
+        res.status(500).json({ 
+            error: 'Failed to update post',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Delete a post
+ * DELETE /api/social-media/posts/:id
+ */
+app.delete('/api/social-media/posts/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        await db.collection('social_media_posts').doc(id).delete();
+
+        res.json({
+            success: true,
+            message: 'Post deleted successfully'
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error deleting post:', error);
+        res.status(500).json({ 
+            error: 'Failed to delete post',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Bulk delete posts
+ * POST /api/social-media/posts/bulk-delete
+ */
+app.post('/api/social-media/posts/bulk-delete', async (req, res) => {
+    try {
+        const { ids } = req.body;
+
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ error: 'Post IDs array is required' });
+        }
+
+        const batch = db.batch();
+        ids.forEach(id => {
+            const docRef = db.collection('social_media_posts').doc(id);
+            batch.delete(docRef);
+        });
+
+        await batch.commit();
+
+        res.json({
+            success: true,
+            message: `${ids.length} post(s) deleted successfully`,
+            deleted: ids.length
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error bulk deleting posts:', error);
+        res.status(500).json({ 
+            error: 'Failed to delete posts',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Update post status
+ * PATCH /api/social-media/posts/:id/status
+ */
+app.patch('/api/social-media/posts/:id/status', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        if (!status || !['scheduled', 'published', 'paused', 'failed'].includes(status)) {
+            return res.status(400).json({ error: 'Valid status is required' });
+        }
+
+        await db.collection('social_media_posts').doc(id).update({
+            status,
+            updated_at: FieldValue.serverTimestamp()
+        });
+
+        res.json({
+            success: true,
+            message: 'Post status updated successfully',
+            data: { id, status }
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error updating post status:', error);
+        res.status(500).json({ 
+            error: 'Failed to update post status',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Get post insights
+ * GET /api/social-media/posts/:id/insights
+ */
+app.get('/api/social-media/posts/:id/insights', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const doc = await db.collection('social_media_posts').doc(id).get();
+        
+        if (!doc.exists) {
+            return res.status(404).json({ error: 'Post not found' });
+        }
+
+        const postData = doc.data();
+        const insights = postData.insights || null;
+
+        res.json({
+            success: true,
+            data: insights
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error fetching insights:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch insights',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Get aggregated insights
+ * GET /api/social-media/insights
+ */
+app.get('/api/social-media/insights', async (req, res) => {
+    try {
+        const { platform, startDate, endDate } = req.query;
+        
+        let query = db.collection('social_media_posts');
+
+        if (platform && platform !== 'all') {
+            query = query.where('platforms', 'array-contains', platform);
+        }
+
+        const snapshot = await query.get();
+        const posts = snapshot.docs.map(doc => doc.data());
+
+        // Calculate aggregated insights
+        const insights = {
+            totalPosts: posts.length,
+            totalReach: 0,
+            totalEngagement: 0,
+            totalLikes: 0,
+            totalComments: 0,
+            totalShares: 0,
+            platformStats: {
+                facebook: { posts: 0, reach: 0, engagement: 0 },
+                twitter: { posts: 0, reach: 0, engagement: 0 },
+                instagram: { posts: 0, reach: 0, engagement: 0 },
+                linkedin: { posts: 0, reach: 0, engagement: 0 },
+                whatsapp: { posts: 0, reach: 0, engagement: 0 },
+                youtube: { posts: 0, reach: 0, engagement: 0 }
+            }
+        };
+
+        posts.forEach(post => {
+            if (post.insights) {
+                insights.totalReach += post.insights.reach || 0;
+                insights.totalEngagement += post.insights.engagement || 0;
+                insights.totalLikes += post.insights.likes || 0;
+                insights.totalComments += post.insights.comments || 0;
+                insights.totalShares += post.insights.shares || 0;
+            }
+
+            if (post.platforms) {
+                post.platforms.forEach(platformId => {
+                    if (insights.platformStats[platformId]) {
+                        insights.platformStats[platformId].posts += 1;
+                        if (post.insights) {
+                            insights.platformStats[platformId].reach += post.insights.reach || 0;
+                            insights.platformStats[platformId].engagement += post.insights.engagement || 0;
+                        }
+                    }
+                });
+            }
+        });
+
+        res.json({
+            success: true,
+            data: insights
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error fetching insights:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch insights',
+            message: error.message 
+        });
+    }
+});
+
+/**
+ * Get platform statistics
+ * GET /api/social-media/stats
+ */
+app.get('/api/social-media/stats', async (req, res) => {
+    try {
+        const snapshot = await db.collection('social_media_posts').get();
+        const posts = snapshot.docs.map(doc => doc.data());
+
+        const stats = {
+            total: posts.length,
+            published: posts.filter(p => p.status === 'published').length,
+            scheduled: posts.filter(p => p.status === 'scheduled').length,
+            paused: posts.filter(p => p.status === 'paused').length,
+            failed: posts.filter(p => p.status === 'failed').length,
+            webhook: posts.filter(p => p.source === 'webhook').length,
+            manual: posts.filter(p => p.source === 'manual' || !p.source).length,
+            byPlatform: {
+                facebook: posts.filter(p => p.platforms?.includes('facebook')).length,
+                twitter: posts.filter(p => p.platforms?.includes('twitter')).length,
+                instagram: posts.filter(p => p.platforms?.includes('instagram')).length,
+                linkedin: posts.filter(p => p.platforms?.includes('linkedin')).length,
+                whatsapp: posts.filter(p => p.platforms?.includes('whatsapp')).length,
+                youtube: posts.filter(p => p.platforms?.includes('youtube')).length
+            }
+        };
+
+        res.json({
+            success: true,
+            data: stats
+        });
+    } catch (error) {
+        console.error('[Social Media API] Error fetching stats:', error);
+        res.status(500).json({ 
+            error: 'Failed to fetch stats',
+            message: error.message 
+        });
+    }
+});
 
 // Export the Express app as a Cloud Function
 exports.api = functions.runWith({

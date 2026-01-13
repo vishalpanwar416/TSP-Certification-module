@@ -1,6 +1,6 @@
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import MarketingDashboard from './components/MarketingDashboard';
-import Login from './components/Login';
+import MarketingDashboard from './pages/MarketingDashboard';
+import Login from './pages/Login';
 
 function AppContent() {
   const { user } = useAuth();

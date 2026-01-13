@@ -34,7 +34,7 @@ const CONFIG = {
         certificateNumber: { x: 512, y: 540 },
         reraNumberLabel: { x: 789, y: 550 },
         reraNumber: { x: 789, y: 540 },
-        watermark: { x: 995, y: 362 } // Vertical watermark
+        watermark: { x: 995, y: 362 } 
     }
 };
 

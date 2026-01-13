@@ -45,15 +45,17 @@ import {
     PieChart,
     Image,
     Star,
-    RefreshCw
+    RefreshCw,
+    Share2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import SocialMediaAutomation from '../components/SocialMediaAutomation';
 import { useAuth } from '../contexts/AuthContext';
 import firebaseService from '../services/marketingService';
 import messagingService from '../services/messagingService';
 import notificationsService from '../services/notificationsService';
 import { certificateAPI } from '../services/api';
-import PreviewCertificateModal from './PreviewCertificateModal';
+import PreviewCertificateModal from '../components/PreviewCertificateModal';
 
 // Utility function to safely parse Firestore timestamps
 const parseFirestoreDate = (timestamp) => {
@@ -462,7 +464,20 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
             });
             onClose();
         } catch (error) {
-            alert('Failed to send messages');
+            console.error('Error in ComposeModal handleSend:', error);
+            console.error('Error details:', {
+                message: error.message,
+                response: error.response,
+                stack: error.stack
+            });
+            
+            // Show more specific error message
+            const errorMessage = error.response?.data?.error || 
+                                error.response?.data?.message || 
+                                error.message || 
+                                'Failed to send messages';
+            
+            alert(`Failed to send messages: ${errorMessage}`);
         } finally {
             setSending(false);
         }
@@ -918,6 +933,8 @@ function MarketingDashboard() {
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [activeTab, setActiveTab] = useState('dashboard');
     const [searchQuery, setSearchQuery] = useState('');
+    const [socialMediaFilterPlatform, setSocialMediaFilterPlatform] = useState('all');
+    const [socialMediaFilterStatus, setSocialMediaFilterStatus] = useState('all');
 
     // Modal states
     const [showUploadModal, setShowUploadModal] = useState(false);
@@ -932,7 +949,6 @@ function MarketingDashboard() {
     const [showNotifications, setShowNotifications] = useState(false);
     const [notifications, setNotifications] = useState([]);
     const [unreadCount, setUnreadCount] = useState(0);
-    const [certificateSearchQuery, setCertificateSearchQuery] = useState('');
     const [certificateTemplate, setCertificateTemplate] = useState(null);
     const [certificateTemplates, setCertificateTemplates] = useState([]); // All templates
     const [templateUploading, setTemplateUploading] = useState(false);
@@ -1049,6 +1065,16 @@ function MarketingDashboard() {
             console.error('[ERROR] Error loading data from Firebase:', error);
             console.error('[ERROR] Error details:', error.message, error.stack);
             console.error('[ERROR] API Base URL was:', API_BASE_URL);
+            console.error('[ERROR] Error response:', error.response);
+            
+            // Show user-friendly error message
+            const errorMsg = error.response?.data?.error || 
+                            error.response?.data?.message || 
+                            error.message || 
+                            'Failed to load data from backend';
+            
+            alert(`Failed to load data: ${errorMsg}\n\nPlease check:\n1. Is the backend server running?\n2. Is the API URL correct? (Check console for [API Config])\n3. Check browser console for more details.`);
+            
             // Set empty arrays to prevent UI errors
             setContacts([]);
             setCampaigns([]);
@@ -1253,7 +1279,19 @@ function MarketingDashboard() {
             }
         } catch (error) {
             console.error('Error sending messages:', error);
-            alert('Failed to send messages. Please try again.');
+            console.error('Error details:', {
+                message: error.message,
+                response: error.response,
+                stack: error.stack
+            });
+            
+            // Show more specific error message
+            const errorMessage = error.response?.data?.error || 
+                                error.response?.data?.message || 
+                                error.message || 
+                                'Failed to send messages. Please try again.';
+            
+            alert(`Failed to send messages: ${errorMessage}`);
         } finally {
             setLoading(false);
         }
@@ -1365,6 +1403,7 @@ function MarketingDashboard() {
         { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
         { id: 'templates', label: 'Templates', icon: BookOpen },
         { id: 'scheduled', label: 'Scheduled', icon: Calendar },
+        { id: 'social-media', label: 'Social Media', icon: Share2 },
     ];
 
 
@@ -1386,6 +1425,7 @@ function MarketingDashboard() {
             case 'whatsapp': return 'WhatsApp';
             case 'templates': return 'Message Templates';
             case 'scheduled': return 'Scheduled Campaigns';
+            case 'social-media': return 'Social Media Automation';
             default: return 'Dashboard';
         }
     };
@@ -1404,6 +1444,12 @@ function MarketingDashboard() {
                 return renderTemplatesView();
             case 'scheduled':
                 return renderScheduledView();
+            case 'social-media':
+                return <SocialMediaAutomation 
+                    searchQuery={searchQuery}
+                    filterPlatform={socialMediaFilterPlatform}
+                    filterStatus={socialMediaFilterStatus}
+                />;
             default:
                 return renderDashboardView();
         }
@@ -1958,10 +2004,10 @@ function MarketingDashboard() {
     const renderCertificatesView = () => {
         // Filter only actual certificates (not templates)
         const filteredCertificates = certificates.filter(cert =>
-            cert.recipient_name?.toLowerCase().includes(certificateSearchQuery.toLowerCase()) ||
-            cert.certificate_number?.toLowerCase().includes(certificateSearchQuery.toLowerCase()) ||
-            cert.phone_number?.includes(certificateSearchQuery) ||
-            cert.email?.toLowerCase().includes(certificateSearchQuery.toLowerCase())
+            cert.recipient_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            cert.certificate_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            cert.phone_number?.includes(searchQuery) ||
+            cert.email?.toLowerCase().includes(searchQuery.toLowerCase())
         );
 
         const handlePreview = (certificate) => {
@@ -2234,32 +2280,11 @@ function MarketingDashboard() {
                                     All Certificates
                                 </h2>
                                 <p className="card-description">
-                                    {certificateSearchQuery
+                                    {searchQuery
                                         ? `Showing ${filteredCertificates.length} of ${certificates.length} certificates`
                                         : `Manage all ${certificates.length} generated certificates for contacts`
                                     }
                                 </p>
-                            </div>
-                            <div className="card-header-right">
-                                <div className="search-box">
-                                    <Search size={18} />
-                                    <input
-                                        type="text"
-                                        placeholder="Search certificates..."
-                                        value={certificateSearchQuery}
-                                        onChange={(e) => setCertificateSearchQuery(e.target.value)}
-                                        className="search-input"
-                                    />
-                                    {certificateSearchQuery && (
-                                    <button
-                                            className="search-clear"
-                                            onClick={() => setCertificateSearchQuery('')}
-                                            title="Clear search"
-                                    >
-                                        <X size={16} />
-                                    </button>
-                                    )}
-                                </div>
                             </div>
                         </div>
 
@@ -2273,10 +2298,10 @@ function MarketingDashboard() {
                                 <div className="empty-icon">
                                     <Award size={64} />
                                 </div>
-                                <h3>{certificateSearchQuery ? 'No certificates found' : 'No certificates yet'}</h3>
+                                <h3>{searchQuery ? 'No certificates found' : 'No certificates yet'}</h3>
                                 <p>
-                                    {certificateSearchQuery
-                                        ? `No certificates match "${certificateSearchQuery}". Try a different search term.`
+                                    {searchQuery
+                                        ? `No certificates match "${searchQuery}". Try a different search term.`
                                         : 'Certificates will appear here once they are created for contacts.'
                                     }
                                 </p>
@@ -3221,16 +3246,85 @@ function MarketingDashboard() {
                     </div>
 
                     <div className="header-right">
-                        <div className="header-search">
-                            <Search size={18} className="search-icon" />
-                            <input
-                                type="text"
-                                className="search-input"
-                                placeholder="Search contacts..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                            />
-                        </div>
+                        {(activeTab === 'contacts' || activeTab === 'social-media' || activeTab === 'certificates') && (
+                            <div className="header-search">
+                                <Search size={18} className="search-icon" />
+                                <input
+                                    type="text"
+                                    className="search-input"
+                                    placeholder={
+                                        activeTab === 'social-media' ? 'Search posts...' : 
+                                        activeTab === 'certificates' ? 'Search certificates...' : 
+                                        'Search contacts...'
+                                    }
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                />
+                            </div>
+                        )}
+
+                        {/* Social Media Filters - Only show for social-media tab */}
+                        {activeTab === 'social-media' && (
+                            <div className="header-filters" style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
+                                <div className="header-filter-group">
+                                    <select
+                                        className="header-filter-select"
+                                        value={socialMediaFilterPlatform}
+                                        onChange={(e) => setSocialMediaFilterPlatform(e.target.value)}
+                                        style={{
+                                            padding: 'var(--spacing-sm) var(--spacing-md)',
+                                            paddingRight: '32px',
+                                            background: 'var(--bg-secondary)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 'var(--radius-lg)',
+                                            color: 'var(--text-primary)',
+                                            fontSize: '0.875rem',
+                                            cursor: 'pointer',
+                                            appearance: 'none',
+                                            backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'12\' viewBox=\'0 0 12 12\'%3E%3Cpath fill=\'%2364748b\' d=\'M6 9L1 4h10z\'/%3E%3C/svg%3E")',
+                                            backgroundRepeat: 'no-repeat',
+                                            backgroundPosition: 'right var(--spacing-sm) center',
+                                            paddingRight: 'var(--spacing-xl)'
+                                        }}
+                                    >
+                                        <option value="all">All Platforms</option>
+                                        <option value="facebook">Facebook</option>
+                                        <option value="twitter">X</option>
+                                        <option value="instagram">Instagram</option>
+                                        <option value="linkedin">LinkedIn</option>
+                                        <option value="whatsapp">WhatsApp</option>
+                                        <option value="youtube">YouTube</option>
+                                    </select>
+                                </div>
+                                <div className="header-filter-group">
+                                    <select
+                                        className="header-filter-select"
+                                        value={socialMediaFilterStatus}
+                                        onChange={(e) => setSocialMediaFilterStatus(e.target.value)}
+                                        style={{
+                                            padding: 'var(--spacing-sm) var(--spacing-md)',
+                                            paddingRight: '32px',
+                                            background: 'var(--bg-secondary)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 'var(--radius-lg)',
+                                            color: 'var(--text-primary)',
+                                            fontSize: '0.875rem',
+                                            cursor: 'pointer',
+                                            appearance: 'none',
+                                            backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'12\' viewBox=\'0 0 12 12\'%3E%3Cpath fill=\'%2364748b\' d=\'M6 9L1 4h10z\'/%3E%3C/svg%3E")',
+                                            backgroundRepeat: 'no-repeat',
+                                            backgroundPosition: 'right var(--spacing-sm) center',
+                                            paddingRight: 'var(--spacing-xl)'
+                                        }}
+                                    >
+                                        <option value="all">All Status</option>
+                                        <option value="scheduled">Scheduled</option>
+                                        <option value="published">Published</option>
+                                        <option value="paused">Paused</option>
+                                    </select>
+                                </div>
+                            </div>
+                        )}
 
                         <div className="notification-container" style={{ position: 'relative' }}>
                             <button 

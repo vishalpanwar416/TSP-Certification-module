@@ -41,7 +41,10 @@ export async function apiRequest(endpoint, options = {}) {
     };
 
     try {
+        console.log(`[API Request] ${options.method || 'GET'} ${url}`);
         const response = await fetch(url, config);
+
+        console.log(`[API Response] ${response.status} ${response.statusText} for ${endpoint}`);
 
         // Handle non-JSON responses (like redirects)
         if (response.redirected || response.status === 302) {
@@ -53,10 +56,13 @@ export async function apiRequest(endpoint, options = {}) {
         if (contentType && contentType.includes('application/json')) {
             data = await response.json();
         } else {
-            data = { error: await response.text() };
+            const textData = await response.text();
+            console.warn(`[API Warning] Non-JSON response for ${endpoint}:`, textData.substring(0, 200));
+            data = { error: textData };
         }
 
         if (!response.ok) {
+            console.error(`[API Error] ${response.status} for ${endpoint}:`, data);
             const error = new Error(data.error || data.message || `Request failed with status ${response.status}`);
             error.response = {
                 status: response.status,
@@ -68,15 +74,23 @@ export async function apiRequest(endpoint, options = {}) {
         // Return data directly if wrapped in success response
         // Handle paginated responses (return data array, not the whole response object)
         if (data.success && Array.isArray(data.data)) {
+            console.log(`[API Success] ${endpoint}: Received ${data.data.length} items`);
             return data.data;
         }
-        return data.data !== undefined ? data.data : data;
+        const result = data.data !== undefined ? data.data : data;
+        console.log(`[API Success] ${endpoint}:`, Array.isArray(result) ? `Received ${result.length} items` : 'Received data');
+        return result;
     } catch (error) {
-        console.error(`API Error [${endpoint}]:`, error);
+        console.error(`[API Error] ${endpoint}:`, error);
+        console.error(`[API Error] URL was: ${url}`);
+        console.error(`[API Error] Method: ${options.method || 'GET'}`);
         if (error.response) {
             throw error;
         }
         // Network or other errors
-        throw new Error(error.message || 'Network error occurred. Please check your internet connection and ensure the backend is running.');
+        const networkError = new Error(error.message || 'Network error occurred. Please check your internet connection and ensure the backend is running.');
+        networkError.isNetworkError = true;
+        networkError.url = url;
+        throw networkError;
     }
 }

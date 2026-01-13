@@ -181,16 +181,44 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
     }
 
     // For AiSensy, handle message formatting
-    // Most campaigns expect a single string with newlines preserved
-    // Normalize line endings and send as single string (this matches the test file pattern)
+    // IMPORTANT: AiSensy campaign templates can be configured in two ways:
+    // 1. Single parameter: Expects entire message as one string (newlines preserved in the string)
+    // 2. Multiple parameters: Expects each line as a separate parameter
+    // 
+    // Default: Send as single string (matches test file pattern and works for most campaigns)
+    // If your campaign template requires multiple parameters, set SPLIT_BY_NEWLINES=true
+    const SPLIT_BY_NEWLINES = process.env.AISENSY_SPLIT_BY_NEWLINES === 'true';
+    
     let templateParams;
     if (Array.isArray(processedMessage)) {
         templateParams = processedMessage;
     } else if (typeof processedMessage === 'string') {
         // Normalize line endings (convert \r\n and \r to \n for consistency)
-        // Send as a single string - AiSensy should preserve newlines in the message
         const normalizedMessage = processedMessage.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-        templateParams = [normalizedMessage];
+        
+        // Check if message has newlines
+        const hasNewlines = normalizedMessage.includes('\n');
+        
+        if (hasNewlines && SPLIT_BY_NEWLINES) {
+            // Split by newlines - each line becomes a separate parameter
+            // This is needed if your campaign template expects multiple parameters
+            const lines = normalizedMessage.split('\n');
+            // Filter out completely empty lines at the end, but keep internal empty lines for spacing
+            let trimmedLines = lines;
+            while (trimmedLines.length > 0 && trimmedLines[trimmedLines.length - 1].trim() === '') {
+                trimmedLines = trimmedLines.slice(0, -1);
+            }
+            templateParams = trimmedLines.length > 0 ? trimmedLines : [normalizedMessage];
+            console.log(`📝 Message has newlines - splitting into ${templateParams.length} parameters`);
+        } else if (hasNewlines) {
+            // Send as single string with newlines preserved (default - works for most campaigns)
+            templateParams = [normalizedMessage];
+            console.log(`📝 Message has newlines - sending as single string with newlines preserved`);
+            console.log(`📝 If message doesn't display correctly, try setting AISENSY_SPLIT_BY_NEWLINES=true`);
+        } else {
+            // Single line message
+            templateParams = [normalizedMessage];
+        }
     } else {
         templateParams = [processedMessage];
     }
