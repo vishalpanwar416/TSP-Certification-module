@@ -990,8 +990,8 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
             });
         }
 
-        // Send certificate PDF file via WhatsApp (not just a link)
-        // Use sendBulkWhatsApp to send the actual PDF file with a message
+        // Send certificate file via WhatsApp (not just a link)
+        // Use sendBulkWhatsApp to send the actual file with a message
         // Format message to work with AiSensy (will be split by newlines into multiple parameters)
         const message = `🎉 Congratulations ${certificate.recipient_name}!` +
             `\nYou have been awarded a Certificate of Appreciation from Top Selling Property.` +
@@ -1000,17 +1000,85 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
             `\nThank you for your commitment and excellence!` +
             `\nwww.topsellingproperty.com`;
 
-        // Force use of bulk_message campaign for media attachments
-        const result = await sendBulkWhatsApp(
-            recipientNumber,
-            message,
-            certificate.pdf_url,
-            `certificate_${certificate.certificate_number}.pdf`,
-            'bulk_message' // Explicitly use bulk_message campaign for media
-        );
+        // Check which formats are available and send accordingly
+        const hasPdf = certificate.pdf_url && typeof certificate.pdf_url === 'string';
+        const hasJpg = certificate.jpg_url && typeof certificate.jpg_url === 'string';
+        
+        let results = [];
+        let lastError = null;
 
-        // Verify the message was actually sent
-        if (result && result.success !== false) {
+        // Send PDF if available
+        if (hasPdf) {
+            try {
+                const pdfResult = await sendBulkWhatsApp(
+            recipientNumber,
+                    message,
+            certificate.pdf_url,
+                    `certificate_${certificate.certificate_number}.pdf`,
+                    'pdf_certificate' // Use pdf_certificate template for PDF
+                );
+
+                if (pdfResult && pdfResult.success !== false) {
+                    results.push({ format: 'pdf', success: true, data: pdfResult });
+                } else {
+                    throw new Error(pdfResult?.error || 'PDF send failed');
+                }
+            } catch (pdfError) {
+                console.error('Error sending PDF certificate:', pdfError);
+                lastError = pdfError.message || pdfError.toString();
+                results.push({ format: 'pdf', success: false, error: lastError });
+            }
+        }
+
+        // Send JPG if available
+        if (hasJpg) {
+            try {
+                const jpgResult = await sendBulkWhatsApp(
+                    recipientNumber,
+                    message,
+                    certificate.jpg_url,
+                    `certificate_${certificate.certificate_number}.jpg`,
+                    'image_certificate' // Use image_certificate template for JPG
+                );
+
+                if (jpgResult && jpgResult.success !== false) {
+                    results.push({ format: 'jpg', success: true, data: jpgResult });
+                } else {
+                    throw new Error(jpgResult?.error || 'JPG send failed');
+                }
+            } catch (jpgError) {
+                console.error('Error sending JPG certificate:', jpgError);
+                lastError = jpgError.message || jpgError.toString();
+                results.push({ format: 'jpg', success: false, error: lastError });
+            }
+        }
+
+        // If no formats are available, send text-only
+        if (!hasPdf && !hasJpg) {
+            try {
+                const textResult = await sendBulkWhatsApp(
+                    recipientNumber,
+                    message,
+                    null, // No media
+                    null,
+                    'text_notification' // Use text_notification template for text-only
+                );
+
+                if (textResult && textResult.success !== false) {
+                    results.push({ format: 'text', success: true, data: textResult });
+                } else {
+                    throw new Error(textResult?.error || 'Text send failed');
+                }
+            } catch (textError) {
+                console.error('Error sending text notification:', textError);
+                lastError = textError.message || textError.toString();
+                results.push({ format: 'text', success: false, error: lastError });
+            }
+        }
+
+        // Check if at least one message was sent successfully
+        const successCount = results.filter(r => r.success).length;
+        if (successCount > 0) {
             // Update WhatsApp status
             await db.collection('certificates').doc(id).update({
                 whatsapp_sent: true,
@@ -1020,11 +1088,16 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
 
             res.json({
                 success: true,
-                message: 'Certificate sent via WhatsApp successfully',
-                data: result
+                message: `Certificate sent via WhatsApp successfully (${successCount} message(s) sent)`,
+                data: {
+                    results: results,
+                    sent: successCount,
+                    total: results.length
+                }
             });
         } else {
-            throw new Error(result?.error || 'WhatsApp message send failed');
+            // All attempts failed
+            throw new Error(lastError || 'Failed to send certificate via WhatsApp');
         }
     } catch (error) {
         console.error('Error sending certificate via WhatsApp:', error);
@@ -1919,38 +1992,14 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                 }
             } else if (type === 'whatsapp' && contact.phone) {
                 try {
-                    let mediaUrl = null;
-                    let filename = 'certificate.pdf';
+                    // Determine which formats are requested
+                    const formats = certificateAttachment?.formats || { pdf: false, jpg: false };
+                    const wantsPdf = formats.pdf === true;
+                    const wantsJpg = formats.jpg === true;
+                    const hasCertificate = certificateAttachment && (wantsPdf || wantsJpg);
 
-                    // Attach certificate if requested
-                    if (certificateAttachment) {
-                        try {
-                            const certResult = await getOrCreateCertificateForContact(contact, certificateAttachment);
-                            if (certResult && certResult.url) {
-                                mediaUrl = certResult.url;
-                                filename = certResult.filename || filename;
-                                console.log(`✅ Certificate generated for ${contact.name}: ${mediaUrl}`);
-                            } else {
-                                console.warn(`⚠️ Certificate generation returned no URL for ${contact.name}. Sending message without certificate.`);
-                                // Reset to null to ensure it's defined
-                                mediaUrl = null;
-                            }
-                        } catch (certError) {
-                            console.error(`Error getting certificate for ${contact.id}:`, certError);
-                            // Log error but continue sending message without certificate
-                            errors.push({ contactId: contact.id, contact: contact.phone, error: `Certificate generation failed: ${certError.message}. Message sent without certificate.` });
-                            // Ensure mediaUrl is null (not undefined)
-                            mediaUrl = null;
-                        }
-                    }
-
-                    // Ensure mediaUrl is either a valid URL string or null (never undefined)
-                    const finalMediaUrl = (mediaUrl && typeof mediaUrl === 'string') ? mediaUrl : null;
-                    const finalFilename = (filename && typeof filename === 'string') ? filename : 'certificate.pdf';
-
-                    // Validate message is not empty after personalization (for WhatsApp, only if no media)
-                    // Allow messages with content even if they have trailing newlines
-                    if (!finalMediaUrl) {
+                    // Validate message is not empty after personalization (for text-only messages)
+                    if (!hasCertificate) {
                         if (!personalizedMessage || typeof personalizedMessage !== 'string') {
                             console.warn(`Skipping WhatsApp message to ${contact.phone}: Message is null or invalid`);
                             failedCount++;
@@ -1962,7 +2011,6 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                             continue;
                         }
                         // Check if message has any non-whitespace content
-                        // This allows messages like "John\n" (name followed by newline)
                         const hasContent = personalizedMessage.replace(/\s/g, '').length > 0;
                         if (!hasContent) {
                             console.warn(`Skipping WhatsApp message to ${contact.phone}: Message is empty after personalization`);
@@ -1978,37 +2026,131 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
 
                     // Log the personalized message before sending to verify it's complete
                     if (contacts.indexOf(contact) === 0) {
-                        console.log(`📤 Sending WhatsApp to ${contact.phone}${finalMediaUrl ? ` with media: ${finalMediaUrl}` : ' (text only)'}`);
+                        console.log(`📤 Sending WhatsApp to ${contact.phone}`);
+                        console.log(`   Formats: PDF=${wantsPdf}, JPG=${wantsJpg}, Text-only=${!hasCertificate}`);
                         console.log(`   Personalized message length: ${personalizedMessage?.length || 0}`);
                         console.log(`   Personalized message has newlines: ${personalizedMessage?.includes('\n') || false}`);
-                        console.log(`   Personalized message: ${JSON.stringify(personalizedMessage)}`);
-                        console.log(`   Personalized message (raw):`, personalizedMessage);
                     }
-
-                    console.log(`📋 Media URL type: ${typeof finalMediaUrl}, value: ${finalMediaUrl}`);
-
-                    // Double-check that finalMediaUrl is never undefined before passing
-                    const safeMediaUrl = (finalMediaUrl !== undefined && finalMediaUrl !== null) ? finalMediaUrl : null;
-                    const safeFilename = (finalFilename !== undefined && finalFilename !== null) ? finalFilename : 'certificate.pdf';
 
                     // CRITICAL: Ensure personalizedMessage is a string and preserve all content
                     const messageToSend = typeof personalizedMessage === 'string' ? personalizedMessage : String(personalizedMessage || '');
 
-                    const result = await sendBulkWhatsApp(contact.phone, messageToSend, safeMediaUrl, safeFilename, whatsappCampaign);
+                    let messagesSent = 0;
+                    let lastError = null;
 
-                    // Verify the message was actually sent
+                    // Send PDF certificate if requested
+                    if (wantsPdf) {
+                        try {
+                            const pdfResult = await getOrCreateCertificateForContactWithFormat(contact, certificateAttachment, 'pdf');
+                            if (pdfResult && pdfResult.url) {
+                                console.log(`✅ PDF certificate generated for ${contact.name}: ${pdfResult.url}`);
+                                
+                                const result = await sendBulkWhatsApp(
+                                    contact.phone, 
+                                    messageToSend, 
+                                    pdfResult.url, 
+                                    pdfResult.filename, 
+                                    'pdf_certificate' // Use pdf_certificate template
+                                );
+
                     if (result && result.success !== false) {
-                        sentCount++;
+                                    messagesSent++;
+                                    console.log(`✅ PDF certificate sent to ${contact.phone}`);
+                                } else {
+                                    throw new Error(result?.error || 'PDF certificate send failed');
+                                }
+                            } else {
+                                throw new Error('PDF certificate generation returned no URL');
+                            }
+                        } catch (pdfError) {
+                            console.error(`Error sending PDF certificate to ${contact.phone}:`, pdfError);
+                            lastError = pdfError.message || pdfError.toString();
+                            errors.push({ 
+                                contactId: contact.id, 
+                                contact: contact.phone, 
+                                error: `PDF certificate failed: ${lastError}` 
+                            });
+                        }
+                    }
+
+                    // Send JPG certificate if requested
+                    if (wantsJpg) {
+                        try {
+                            const jpgResult = await getOrCreateCertificateForContactWithFormat(contact, certificateAttachment, 'jpg');
+                            if (jpgResult && jpgResult.url) {
+                                console.log(`✅ JPG certificate generated for ${contact.name}: ${jpgResult.url}`);
+                                
+                                const result = await sendBulkWhatsApp(
+                                    contact.phone, 
+                                    messageToSend, 
+                                    jpgResult.url, 
+                                    jpgResult.filename, 
+                                    'image_certificate' // Use image_certificate template
+                                );
+
+                                if (result && result.success !== false) {
+                                    messagesSent++;
+                                    console.log(`✅ JPG certificate sent to ${contact.phone}`);
+                                } else {
+                                    throw new Error(result?.error || 'JPG certificate send failed');
+                                }
+                            } else {
+                                throw new Error('JPG certificate generation returned no URL');
+                            }
+                        } catch (jpgError) {
+                            console.error(`Error sending JPG certificate to ${contact.phone}:`, jpgError);
+                            lastError = jpgError.message || jpgError.toString();
+                            errors.push({ 
+                                contactId: contact.id, 
+                                contact: contact.phone, 
+                                error: `JPG certificate failed: ${lastError}` 
+                            });
+                        }
+                    }
+
+                    // Send text-only message if no certificate is requested
+                    if (!hasCertificate) {
+                        try {
+                            const result = await sendBulkWhatsApp(
+                                contact.phone, 
+                                messageToSend, 
+                                null, // No media
+                                null, 
+                                'text_notification' // Use text_notification template
+                            );
+
+                            if (result && result.success !== false) {
+                                messagesSent++;
+                                console.log(`✅ Text notification sent to ${contact.phone}`);
+                            } else {
+                                throw new Error(result?.error || 'Text notification send failed');
+                            }
+                        } catch (textError) {
+                            console.error(`Error sending text notification to ${contact.phone}:`, textError);
+                            lastError = textError.message || textError.toString();
+                            errors.push({ 
+                                contactId: contact.id, 
+                                contact: contact.phone, 
+                                error: `Text notification failed: ${lastError}` 
+                            });
+                        }
+                    }
+
+                    // Update contact stats if at least one message was sent
+                    if (messagesSent > 0) {
+                        sentCount += messagesSent;
 
                         // Update contact stats
                         const contactRef = db.collection('marketing_contacts').doc(contact.id);
                         batch.update(contactRef, {
-                            whatsapp_sent_count: FieldValue.increment(1),
+                            whatsapp_sent_count: FieldValue.increment(messagesSent),
                             last_contacted_at: FieldValue.serverTimestamp(),
                             last_contact_type: 'whatsapp'
                         });
                     } else {
-                        throw new Error(result?.error || 'Message send failed');
+                        // All messages failed
+                        failedCount++;
+                        throw new Error(lastError || 'All WhatsApp messages failed');
                     }
                 } catch (error) {
                     console.error(`Failed to send WhatsApp to ${contact.phone}:`, error);
@@ -2017,14 +2159,14 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                         message: error.message,
                         name: error.name,
                         contactId: contact.id,
-                        contactPhone: contact.phone,
-                        hasMediaUrl: typeof finalMediaUrl !== 'undefined',
-                        mediaUrlValue: finalMediaUrl
+                        contactPhone: contact.phone
                     });
+                    // Error already added to errors array in individual try-catch blocks above
+                    if (!errors.some(e => e.contactId === contact.id && e.contact === contact.phone)) {
                     failedCount++;
-                    // Ensure error message is safe and doesn't reference undefined variables
                     const errorMessage = error.message || error.toString() || 'Unknown error occurred';
                     errors.push({ contactId: contact.id, contact: contact.phone, error: errorMessage });
+                    }
                 }
             } else {
                 // No valid contact method
@@ -2675,6 +2817,18 @@ app.get('/notifications/unread-count', async (req, res) => {
         res.status(500).json({ error: 'Failed to fetch unread count', details: error.message });
     }
 });
+
+/**
+ * Get or create a certificate for a contact with a specific format
+ */
+async function getOrCreateCertificateForContactWithFormat(contact, attachment, format = 'pdf') {
+    // Create a modified attachment with only the requested format
+    const modifiedAttachment = {
+        ...attachment,
+        formats: format === 'jpg' ? { pdf: false, jpg: true } : { pdf: true, jpg: false }
+    };
+    return getOrCreateCertificateForContact(contact, modifiedAttachment);
+}
 
 /**
  * Get or create a certificate for a contact
@@ -3471,7 +3625,7 @@ app.post('/test/whatsapp/check-number', async (req, res) => {
                 'Test message to check number status',
                 null, // No media
                 null,
-                'bulk_message'
+                'pdf_certificate'
             );
 
             res.json({

@@ -351,7 +351,6 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
     const [selectedCertificate, setSelectedCertificate] = useState('');
     const [formatPDF, setFormatPDF] = useState(true);
     const [formatJPG, setFormatJPG] = useState(false);
-    const [whatsappCampaign, setWhatsappCampaign] = useState('');
     const [scheduleEnabled, setScheduleEnabled] = useState(false);
     const [scheduleDate, setScheduleDate] = useState('');
     const [scheduleTime, setScheduleTime] = useState('');
@@ -461,7 +460,7 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                         jpg: formatJPG
                     }
                 } : null,
-                whatsappCampaign: whatsappCampaign || null,
+                whatsappCampaign: null,
                 scheduledAt
             });
             onClose();
@@ -672,22 +671,6 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                                 />
                             </div>
                         )}
-                        {(sendViaWhatsApp || isWhatsApp) && (
-                            <div className="form-group">
-                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <span>WhatsApp Campaign Name</span>
-                                    <small style={{ fontWeight: 'normal', color: '#6b7280' }}>(Optional - defaults to config or 'bulk_message' if certificate included)</small>
-                                </label>
-                                <input
-                                    type="text"
-                                    className="form-input"
-                                    placeholder="Enter AiSensy campaign name (e.g. bulk_message)"
-                                    value={whatsappCampaign}
-                                    onChange={(e) => setWhatsappCampaign(e.target.value)}
-                                />
-                            </div>
-                        )}
-                        
                         {/* Email Message Body */}
                         {(sendViaEmail || isEmail) && (
                             <div className="form-group">

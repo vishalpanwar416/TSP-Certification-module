@@ -1,17 +1,3 @@
-/**
- * WhatsApp Service using AiSensy API
- * 
- * AiSensy Config:
- * firebase functions:config:set whatsapp.api_key="YOUR_AISENSY_JWT_TOKEN"
- * firebase functions:config:set whatsapp.campaign_name="YOUR_CAMPAIGN_NAME" (optional, defaults to 'bulk_message')
- * firebase functions:config:set whatsapp.media_campaign_name="YOUR_MEDIA_CAMPAIGN" (optional, for media attachments)
- * 
- * Testing Tips:
- * - Add test phone numbers to AiSensy Dashboard > Contacts as "Test Numbers" or "Whitelisted"
- * - This helps reduce rate limiting during development/testing
- * - Production usage with different recipients won't have rate limit issues
- */
-
 const functions = require('firebase-functions');
 const fetch = require('node-fetch');
 
@@ -20,7 +6,7 @@ const config = functions.config();
 const whatsappConfig = {
     // AiSensy Config
     apiKey: config.whatsapp?.api_key,
-    campaignName: config.whatsapp?.campaign_name || 'bulk_message',
+    campaignName: config.whatsapp?.campaign_name || 'pdf_certificate',
     mediaCampaignName: config.whatsapp?.media_campaign_name // Optional: separate campaign for media attachments
 };
 
@@ -109,16 +95,18 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
 
     // For AiSensy, handle message formatting
     // IMPORTANT: AiSensy campaign templates have strict requirements:
-    // - NO newlines allowed in parameters
+    // - NO newlines allowed in a single parameter
+    // - To preserve newlines: Split message into multiple parameters (one per line)
     // - Number of parameters must match campaign template exactly
     // 
-    // Default: Send as single parameter with newlines replaced by spaces
-    // If your campaign template requires multiple parameters, set AISENSY_SPLIT_BY_NEWLINES=true
-    const SPLIT_BY_NEWLINES = process.env.AISENSY_SPLIT_BY_NEWLINES === 'true'; // Default: false (single param)
+    // Default: Automatically split by newlines into multiple parameters
+    // Set AISENSY_SINGLE_PARAM=true to send as single parameter (newlines replaced with spaces)
+    const SINGLE_PARAM = process.env.AISENSY_SINGLE_PARAM === 'true'; // Default: false (split by newlines)
     
     let templateParams;
     if (Array.isArray(processedMessage)) {
-        templateParams = processedMessage;
+        // Already an array - use as is (each element is a parameter)
+        templateParams = processedMessage.map(line => String(line).trim()).filter(line => line.length > 0);
     } else if (typeof processedMessage === 'string') {
         // Normalize line endings (convert \r\n and \r to \n for consistency)
         const normalizedMessage = processedMessage.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -126,17 +114,30 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
         // Check if message has newlines
         const hasNewlines = normalizedMessage.includes('\n');
         
-        if (hasNewlines && SPLIT_BY_NEWLINES) {
+        if (hasNewlines && !SINGLE_PARAM) {
             // Split by newlines - each line becomes a separate parameter
-            // Only use this if your campaign template expects multiple parameters
+            // This preserves newlines in the final message (AiSensy will format them)
             const lines = normalizedMessage.split('\n');
-            // Filter out completely empty lines, but keep non-empty lines
-            const filteredLines = lines.filter(line => line.trim().length > 0);
-            templateParams = filteredLines.length > 0 ? filteredLines : [normalizedMessage.replace(/\n/g, ' ').trim()];
+            // Clean each line: trim whitespace, but keep empty lines as empty strings (for spacing)
+            // Filter out only trailing empty lines at the end
+            let cleanedLines = lines.map(line => line.trimEnd()); // Keep leading spaces if needed, remove trailing
+            
+            // Remove trailing empty lines
+            while (cleanedLines.length > 0 && cleanedLines[cleanedLines.length - 1].trim() === '') {
+                cleanedLines = cleanedLines.slice(0, -1);
+            }
+            
+            // Ensure we have at least one parameter
+            if (cleanedLines.length === 0) {
+                templateParams = [normalizedMessage.replace(/\n/g, ' ').trim()];
+            } else {
+                // Each line becomes a parameter (no newlines in individual params)
+                templateParams = cleanedLines;
+            }
             console.log(`📝 Message has newlines - splitting into ${templateParams.length} parameters`);
+            console.log(`📝 Parameters: ${JSON.stringify(templateParams)}`);
         } else {
-            // Default: Replace newlines with spaces for single parameter campaigns
-            // This avoids "newlines not allowed" and "params don't match" errors
+            // Single parameter mode: Replace newlines with spaces
             const singleLineMessage = normalizedMessage
                 .replace(/\n+/g, ' ')  // Replace newlines with single space
                 .replace(/\s+/g, ' ')  // Replace multiple spaces with single space
@@ -144,10 +145,27 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
             templateParams = [singleLineMessage];
             if (hasNewlines) {
                 console.log(`📝 Message has newlines - converted to single line (newlines replaced with spaces)`);
+                console.log(`📝 Note: To preserve newlines, ensure your AiSensy campaign template accepts ${normalizedMessage.split('\n').filter(l => l.trim()).length} parameters`);
             }
         }
     } else {
-        templateParams = [processedMessage];
+        templateParams = [String(processedMessage)];
+    }
+    
+    // Final safety check: Ensure no parameter contains newlines or tabs
+    templateParams = templateParams.map(param => {
+        const cleaned = String(param)
+            .replace(/\r\n/g, ' ')  // Remove newlines
+            .replace(/\r/g, ' ')    // Remove carriage returns
+            .replace(/\n/g, ' ')     // Remove line feeds
+            .replace(/\t/g, ' ')     // Remove tabs
+            .replace(/\s{5,}/g, ' ') // Replace 5+ consecutive spaces with single space
+            .trim();
+        return cleaned;
+    }).filter(param => param.length > 0); // Remove empty parameters
+    
+    if (templateParams.length === 0) {
+        templateParams = ['Message']; // Fallback to prevent empty params
     }
 
     // AiSensy API body - message goes in templateParams array
@@ -261,6 +279,12 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
                 }
             }
             
+            // Handle template parameter mismatch
+            if (errorMsg.includes('does not match') || errorMsg.includes('template params') || errorMsg.includes('parameter')) {
+                const paramCount = templateParams.length;
+                throw new Error(`Template parameter mismatch: Your message has ${paramCount} lines, but your AiSensy campaign template is configured for a different number of parameters. Please configure your campaign template in AiSensy Dashboard to accept ${paramCount} parameters: {1} {2} ${paramCount > 2 ? '{3} ' : ''}${paramCount > 3 ? '{4} ' : ''}${paramCount > 4 ? '...' : ''} Or set AISENSY_SINGLE_PARAM=true to send as single parameter.`);
+            }
+            
             throw new Error(`AiSensy API Error: ${errorMsg}`);
         }
 
@@ -280,6 +304,12 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
                 } else {
                     throw new Error(`Phone number ${formattedNumber} is not opted-in or has restrictions. Please add/verify this number in your AiSensy dashboard and ensure it has opted-in to receive messages.`);
                 }
+            }
+            
+            // Handle template parameter mismatch
+            if (errorMsg.includes('does not match') || errorMsg.includes('template params') || errorMsg.includes('parameter')) {
+                const paramCount = templateParams.length;
+                throw new Error(`Template parameter mismatch: Your message has ${paramCount} lines, but your AiSensy campaign template is configured for a different number of parameters. Please configure your campaign template in AiSensy Dashboard to accept ${paramCount} parameters: {1} {2} ${paramCount > 2 ? '{3} ' : ''}${paramCount > 3 ? '{4} ' : ''}${paramCount > 4 ? '...' : ''} Or set AISENSY_SINGLE_PARAM=true to send as single parameter.`);
             }
             
             throw new Error(errorMsg);
@@ -413,9 +443,9 @@ const sendBulkWhatsApp = async (recipientNumber, message, mediaUrl = null, filen
             }
         }
         
-        // Only fallback to 'bulk_message' if no campaign is configured at all
+        // Only fallback to 'pdf_certificate' if no campaign is configured at all
         if (!campaignName) {
-            campaignName = 'bulk_message';
+            campaignName = 'pdf_certificate';
             console.log(`⚠️ No campaign configured, using default: ${campaignName}`);
         }
     }
