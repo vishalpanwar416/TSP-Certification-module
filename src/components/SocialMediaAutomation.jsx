@@ -15,7 +15,6 @@ import {
     Trash2,
     Play,
     Pause,
-    Settings,
     BarChart3,
     Eye,
     Heart,
@@ -52,13 +51,17 @@ import {
 } from 'lucide-react';
 import { socialMediaAPI } from '../services/socialMediaService';
 import socialMediaFirebaseService from '../services/socialMediaFirebaseService';
+import PostsView from './social-media/PostsView';
+import CalendarView from './social-media/CalendarView';
+import InsightsView from './social-media/InsightsView';
+import PipelineView from './social-media/PipelineView';
 
 function SocialMediaAutomation({ 
     searchQuery: externalSearchQuery = '',
     filterPlatform: externalFilterPlatform = 'all',
     filterStatus: externalFilterStatus = 'all'
 }) {
-    const [activeTab, setActiveTab] = useState('posts'); // posts, calendar, insights, pipeline, settings
+    const [activeTab, setActiveTab] = useState('posts'); // posts, calendar, insights, pipeline
     const [posts, setPosts] = useState([]);
     const [insights, setInsights] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -89,8 +92,6 @@ function SocialMediaAutomation({
     const [webhookSecret, setWebhookSecret] = useState('');
     const [webhookPosts, setWebhookPosts] = useState([]);
     const [webhookCopied, setWebhookCopied] = useState(false);
-    const [webhookConnectionStatus, setWebhookConnectionStatus] = useState(null); // null, 'checking', 'connected', 'disconnected', 'error'
-    const [webhookLastChecked, setWebhookLastChecked] = useState(null);
 
     const platforms = [
         { id: 'facebook', name: 'Facebook', icon: Facebook, color: '#1877F2', connected: true, charLimit: 5000, optimalLength: 250 },
@@ -144,12 +145,21 @@ function SocialMediaAutomation({
         const loadPosts = async () => {
             setLoading(true);
             try {
+                console.log('[Social Media] Loading posts from Firestore...');
+                
+                // Check if Firebase is initialized
+                if (!socialMediaFirebaseService) {
+                    throw new Error('Firebase service is not initialized');
+                }
+
                 // Get all posts
                 const allPosts = await socialMediaFirebaseService.getAllPosts({
                     platform: externalFilterPlatform,
                     status: externalFilterStatus,
                     searchQuery: externalSearchQuery
                 });
+
+                console.log('[Social Media] Posts loaded:', allPosts?.length || 0);
 
                 // Separate manual and webhook posts
                 const manualPosts = allPosts.filter(p => p.source === 'manual' || !p.source);
@@ -159,28 +169,87 @@ function SocialMediaAutomation({
                 setWebhookPosts(webhookPostsData);
 
                 // Load insights/stats
-                const stats = await socialMediaFirebaseService.getPostStats();
+                try {
+                    const stats = await socialMediaFirebaseService.getPostStats();
+                    setInsights({
+                        totalPosts: stats.total,
+                        totalReach: 0, // Will be calculated from insights
+                        totalEngagement: 0,
+                        totalLikes: 0,
+                        totalComments: 0,
+                        totalShares: 0,
+                        platformStats: {
+                            facebook: { posts: stats.byPlatform.facebook, reach: 0, engagement: 0 },
+                            twitter: { posts: stats.byPlatform.twitter, reach: 0, engagement: 0 },
+                            instagram: { posts: stats.byPlatform.instagram, reach: 0, engagement: 0 },
+                            linkedin: { posts: stats.byPlatform.linkedin, reach: 0, engagement: 0 },
+                            whatsapp: { posts: stats.byPlatform.whatsapp, reach: 0, engagement: 0 },
+                            youtube: { posts: stats.byPlatform.youtube, reach: 0, engagement: 0 }
+                        }
+                    });
+                } catch (statsError) {
+                    console.warn('[Social Media] Error loading stats (non-critical):', statsError);
+                    // Set default insights if stats fail
+                    setInsights({
+                        totalPosts: allPosts.length,
+                        totalReach: 0,
+                        totalEngagement: 0,
+                        totalLikes: 0,
+                        totalComments: 0,
+                        totalShares: 0,
+                        platformStats: {
+                            facebook: { posts: 0, reach: 0, engagement: 0 },
+                            twitter: { posts: 0, reach: 0, engagement: 0 },
+                            instagram: { posts: 0, reach: 0, engagement: 0 },
+                            linkedin: { posts: 0, reach: 0, engagement: 0 },
+                            whatsapp: { posts: 0, reach: 0, engagement: 0 },
+                            youtube: { posts: 0, reach: 0, engagement: 0 }
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('[Social Media] Error loading posts from Firestore:', error);
+                console.error('[Social Media] Error details:', {
+                    message: error.message,
+                    code: error.code,
+                    stack: error.stack
+                });
+                
+                // Show user-friendly error message
+                const errorMessage = error.message || 'Unknown error';
+                let userMessage = 'Failed to load social media posts';
+                
+                if (error.code === 'permission-denied') {
+                    userMessage = 'Permission denied. Please check your Firebase security rules.';
+                } else if (error.code === 'unavailable') {
+                    userMessage = 'Firebase service is unavailable. Please check your internet connection.';
+                } else if (error.message?.includes('index')) {
+                    userMessage = 'Firestore index missing. Please create the required index in Firebase Console.';
+                } else if (error.message) {
+                    userMessage = `Error: ${error.message}`;
+                }
+                
+                alert(`${userMessage}\n\nCheck browser console for more details.`);
+                
+                // Fallback to empty arrays on error
+                setPosts([]);
+                setWebhookPosts([]);
                 setInsights({
-                    totalPosts: stats.total,
-                    totalReach: 0, // Will be calculated from insights
+                    totalPosts: 0,
+                    totalReach: 0,
                     totalEngagement: 0,
                     totalLikes: 0,
                     totalComments: 0,
                     totalShares: 0,
                     platformStats: {
-                        facebook: { posts: stats.byPlatform.facebook, reach: 0, engagement: 0 },
-                        twitter: { posts: stats.byPlatform.twitter, reach: 0, engagement: 0 },
-                        instagram: { posts: stats.byPlatform.instagram, reach: 0, engagement: 0 },
-                        linkedin: { posts: stats.byPlatform.linkedin, reach: 0, engagement: 0 },
-                        whatsapp: { posts: stats.byPlatform.whatsapp, reach: 0, engagement: 0 },
-                        youtube: { posts: stats.byPlatform.youtube, reach: 0, engagement: 0 }
+                        facebook: { posts: 0, reach: 0, engagement: 0 },
+                        twitter: { posts: 0, reach: 0, engagement: 0 },
+                        instagram: { posts: 0, reach: 0, engagement: 0 },
+                        linkedin: { posts: 0, reach: 0, engagement: 0 },
+                        whatsapp: { posts: 0, reach: 0, engagement: 0 },
+                        youtube: { posts: 0, reach: 0, engagement: 0 }
                     }
                 });
-            } catch (error) {
-                console.error('Error loading posts from Firestore:', error);
-                // Fallback to empty arrays on error
-                setPosts([]);
-                setWebhookPosts([]);
             } finally {
                 setLoading(false);
             }
@@ -189,19 +258,27 @@ function SocialMediaAutomation({
         loadPosts();
 
         // Subscribe to real-time updates
-        const unsubscribe = socialMediaFirebaseService.subscribeToPosts((updatedPosts) => {
-            const manualPosts = updatedPosts.filter(p => p.source === 'manual' || !p.source);
-            const webhookPostsData = updatedPosts.filter(p => p.source === 'webhook');
-            setPosts(manualPosts);
-            setWebhookPosts(webhookPostsData);
-        }, {
-            platform: externalFilterPlatform,
-            status: externalFilterStatus,
-            searchQuery: externalSearchQuery
-        });
+        let unsubscribe;
+        try {
+            unsubscribe = socialMediaFirebaseService.subscribeToPosts((updatedPosts) => {
+                console.log('[Social Media] Real-time update received:', updatedPosts?.length || 0, 'posts');
+                const manualPosts = (updatedPosts || []).filter(p => p.source === 'manual' || !p.source);
+                const webhookPostsData = (updatedPosts || []).filter(p => p.source === 'webhook');
+                setPosts(manualPosts);
+                setWebhookPosts(webhookPostsData);
+            }, {
+                platform: externalFilterPlatform,
+                status: externalFilterStatus,
+                searchQuery: externalSearchQuery
+            });
+        } catch (subscribeError) {
+            console.error('[Social Media] Error setting up subscription:', subscribeError);
+        }
 
         return () => {
-            if (unsubscribe) unsubscribe();
+            if (unsubscribe && typeof unsubscribe === 'function') {
+                unsubscribe();
+            }
         };
     }, [externalFilterPlatform, externalFilterStatus, externalSearchQuery]);
 
@@ -493,402 +570,53 @@ function SocialMediaAutomation({
 
 
     const renderPostsView = () => (
-        <div className="posts-view">
-            {/* Bulk Actions - Only show when posts are selected */}
-            {selectedPosts.length > 0 && (
-                <div className="bulk-actions-bar">
-                        <span className="bulk-selection-count">
-                            {selectedPosts.length} selected
-                        </span>
-                        <button
-                            className="btn btn-outline btn-sm"
-                            onClick={() => handleBulkStatusChange('paused')}
-                        >
-                            <Pause size={16} />
-                            Pause
-                        </button>
-                        <button
-                            className="btn btn-outline btn-sm"
-                            onClick={() => handleBulkStatusChange('scheduled')}
-                        >
-                            <Play size={16} />
-                            Resume
-                        </button>
-                        <button
-                            className="btn btn-danger btn-sm"
-                            onClick={handleBulkDelete}
-                        >
-                            <Trash2 size={16} />
-                            Delete
-                        </button>
-                        <button
-                            className="btn btn-outline btn-sm"
-                            onClick={() => setSelectedPosts([])}
-                        >
-                            Clear
-                        </button>
-                    </div>
-                )}
-
-            {/* Posts Grid */}
-            {filteredPosts.length === 0 ? (
-                <div className="empty-state">
-                    <div className="empty-icon">
-                        <Share2 size={64} />
-                    </div>
-                    <h3>No posts found</h3>
-                    <p>{externalSearchQuery || externalFilterPlatform !== 'all' || externalFilterStatus !== 'all' 
-                        ? 'Try adjusting your search or filters' 
-                        : 'Create your first social media post to get started'}
-                    </p>
-                    {!externalSearchQuery && externalFilterPlatform === 'all' && externalFilterStatus === 'all' && (
-                        <button
-                            className="btn btn-primary"
-                            onClick={() => setShowCreateModal(true)}
-                        >
-                            <Plus size={20} />
-                            Create Your First Post
-                        </button>
-                    )}
-                </div>
-            ) : (
-                <div className="posts-grid">
-                    {filteredPosts.map(post => {
-                        const isSelected = selectedPosts.includes(post.id);
-                        return (
-                            <div key={post.id} className={`post-card ${isSelected ? 'selected' : ''}`}>
-                                <div className="post-card-checkbox">
-                                    <button
-                                        className="post-select-btn"
-                                        onClick={() => togglePostSelection(post.id)}
-                                    >
-                                        {isSelected ? (
-                                            <CheckSquare size={18} />
-                                        ) : (
-                                            <Square size={18} />
-                                        )}
-                                    </button>
-                                </div>
-                                <div className="post-card-header">
-                                    <div className="post-platforms">
-                                        {post.platforms.map(platformId => {
-                                            const platform = platforms.find(p => p.id === platformId);
-                                            const Icon = platform?.icon || Share2;
-                                            return (
-                                                <div
-                                                    key={platformId}
-                                                    className="platform-badge"
-                                                    style={{ backgroundColor: platform?.color + '20', color: platform?.color }}
-                                                    title={platform?.name}
-                                                >
-                                                    <Icon size={16} />
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-                                    {getStatusBadge(post.status)}
-                                </div>
-                                <div className="post-card-content">
-                                    <p>{post.content}</p>
-                                    {post.image && (
-                                        <div className="post-image-preview">
-                                            <ImageIcon size={20} />
-                                            <span>Image attached</span>
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="post-card-footer">
-                                    <div className="post-meta">
-                                        <div className="meta-item">
-                                            <Calendar size={14} />
-                                            <span>
-                                                {post.status === 'published' && post.publishedDate
-                                                    ? formatDateTime(post.publishedDate)
-                                                    : formatDateTime(post.scheduledDate)
-                                                }
-                                            </span>
-                                        </div>
-                                        {post.insights && (
-                                            <div className="post-insights-preview">
-                                                <Eye size={14} /> {post.insights.reach}
-                                                <Heart size={14} /> {post.insights.likes}
-                                                <MessageCircle size={14} /> {post.insights.comments}
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="post-actions">
-                                        <button
-                                            className="action-btn action-btn-edit"
-                                            onClick={() => handleEditPost(post)}
-                                            title="Edit"
-                                        >
-                                            <Edit size={16} />
-                                        </button>
-                                        <button
-                                            className="action-btn action-btn-toggle"
-                                            onClick={() => handleToggleStatus(post.id)}
-                                            title={post.status === 'scheduled' ? 'Pause' : 'Resume'}
-                                        >
-                                            {post.status === 'scheduled' ? (
-                                                <Pause size={16} />
-                                            ) : (
-                                                <Play size={16} />
-                                            )}
-                                        </button>
-                                        <button
-                                            className="action-btn action-btn-delete"
-                                            onClick={() => handleDeletePost(post.id)}
-                                            title="Delete"
-                                        >
-                                            <Trash2 size={16} />
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            )}
-        </div>
+        <PostsView
+            posts={filteredPosts}
+            platforms={platforms}
+            selectedPosts={selectedPosts}
+            onToggleSelection={(postId, clearAll) => {
+                if (clearAll) {
+                    setSelectedPosts([]);
+                } else {
+                    togglePostSelection(postId);
+                }
+            }}
+            onPreview={(post) => {
+                // TODO: Implement preview
+                alert('Preview: ' + post.content.substring(0, 50));
+            }}
+            onEdit={handleEditPost}
+            onDelete={handleDeletePost}
+            onToggleStatus={handleToggleStatus}
+            onBulkDelete={handleBulkDelete}
+            onBulkStatusChange={handleBulkStatusChange}
+            onCreateClick={() => {
+                resetForm();
+                setShowCreateModal(true);
+            }}
+            searchQuery={externalSearchQuery}
+            filterPlatform={externalFilterPlatform}
+            filterStatus={externalFilterStatus}
+        />
     );
 
-    const renderCalendarView = () => {
-        const today = new Date();
-        const currentMonth = today.getMonth();
-        const currentYear = today.getFullYear();
-        const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-        const firstDayOfMonth = new Date(currentYear, currentMonth, 1).getDay();
-        
-        const scheduledPostsByDate = {};
-        posts.filter(p => p.status === 'scheduled' && p.scheduledDate).forEach(post => {
-            const date = new Date(post.scheduledDate).toDateString();
-            if (!scheduledPostsByDate[date]) {
-                scheduledPostsByDate[date] = [];
-            }
-            scheduledPostsByDate[date].push(post);
-        });
-
-        const calendarDays = [];
-        for (let i = 0; i < firstDayOfMonth; i++) {
-            calendarDays.push(null);
-        }
-        for (let day = 1; day <= daysInMonth; day++) {
-            calendarDays.push(day);
-        }
-
-        return (
-            <div className="calendar-view">
-                <div className="calendar-header">
-                    <h3>Content Calendar</h3>
-                    <div className="calendar-actions">
-                        <button className="btn btn-outline" onClick={() => setShowCreateModal(true)}>
-                            <Plus size={18} />
-                            Schedule Post
-                        </button>
-                        <button className="btn btn-outline" onClick={() => setShowBestTimeModal(true)}>
-                            <Lightbulb size={18} />
-                            Best Times
-                        </button>
-                    </div>
-                </div>
-                <div className="calendar-grid">
-                    {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-                        <div key={day} className="calendar-day-header">{day}</div>
-                    ))}
-                    {calendarDays.map((day, index) => {
-                        if (day === null) {
-                            return <div key={`empty-${index}`} className="calendar-day empty"></div>;
-                        }
-                        const date = new Date(currentYear, currentMonth, day);
-                        const dateKey = date.toDateString();
-                        const dayPosts = scheduledPostsByDate[dateKey] || [];
-                        const isToday = day === today.getDate() && currentMonth === today.getMonth();
-                        
-                        return (
-                            <div key={day} className={`calendar-day ${isToday ? 'today' : ''}`}>
-                                <div className="calendar-day-number">{day}</div>
-                                {dayPosts.length > 0 && (
-                                    <div className="calendar-posts">
-                                        {dayPosts.slice(0, 3).map(post => (
-                                            <div 
-                                                key={post.id} 
-                                                className="calendar-post-item"
-                                                onClick={() => handleEditPost(post)}
-                                                title={post.content.substring(0, 50)}
-                                            >
-                                                <div className="calendar-post-platforms">
-                                                    {post.platforms.slice(0, 2).map(platformId => {
-                                                        const platform = platforms.find(p => p.id === platformId);
-                                                        const Icon = platform?.icon || Share2;
-                                                        return (
-                                                            <Icon key={platformId} size={12} style={{ color: platform?.color }} />
-                                                        );
-                                                    })}
-                                                    {post.platforms.length > 2 && <span>+{post.platforms.length - 2}</span>}
-                                                </div>
-                                                <div className="calendar-post-time">
-                                                    {new Date(post.scheduledDate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-                                                </div>
-                                            </div>
-                                        ))}
-                                        {dayPosts.length > 3 && (
-                                            <div className="calendar-post-more">+{dayPosts.length - 3} more</div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        );
-    };
+    const renderCalendarView = () => (
+        <CalendarView
+            posts={posts}
+            onCreateClick={() => {
+                resetForm();
+                setShowCreateModal(true);
+            }}
+            onBestTimesClick={() => setShowBestTimeModal(true)}
+        />
+    );
 
 
     const renderInsightsView = () => (
-        <div className="insights-view">
-            {!insights ? (
-                <div className="empty-state">
-                    <BarChart3 size={64} />
-                    <h3>No insights available</h3>
-                    <p>Insights will appear here once you start posting</p>
-                </div>
-            ) : (
-                <>
-                    {/* Overview Stats */}
-                    <div className="insights-overview">
-                        <div className="insight-card">
-                            <div className="insight-icon" style={{ backgroundColor: '#1877F220', color: '#1877F2' }}>
-                                <Share2 size={24} />
-                            </div>
-                            <div className="insight-content">
-                                <span className="insight-label">Total Posts</span>
-                                <span className="insight-value">{insights.totalPosts}</span>
-                            </div>
-                        </div>
-                        <div className="insight-card">
-                            <div className="insight-icon" style={{ backgroundColor: '#10B98120', color: '#10B981' }}>
-                                <Eye size={24} />
-                            </div>
-                            <div className="insight-content">
-                                <span className="insight-label">Total Reach</span>
-                                <span className="insight-value">{insights.totalReach.toLocaleString()}</span>
-                            </div>
-                        </div>
-                        <div className="insight-card">
-                            <div className="insight-icon" style={{ backgroundColor: '#F59E0B20', color: '#F59E0B' }}>
-                                <TrendingUp size={24} />
-                            </div>
-                            <div className="insight-content">
-                                <span className="insight-label">Total Engagement</span>
-                                <span className="insight-value">{insights.totalEngagement.toLocaleString()}</span>
-                            </div>
-                        </div>
-                        <div className="insight-card">
-                            <div className="insight-icon" style={{ backgroundColor: '#EF444420', color: '#EF4444' }}>
-                                <Heart size={24} />
-                            </div>
-                            <div className="insight-content">
-                                <span className="insight-label">Total Likes</span>
-                                <span className="insight-value">{insights.totalLikes.toLocaleString()}</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Platform Performance */}
-                    <div className="card">
-                        <div className="card-header">
-                            <h3 className="card-title">Platform Performance</h3>
-                        </div>
-                        <div className="platform-performance">
-                            {platforms.filter(p => insights.platformStats[p.id]).map(platform => {
-                                const stats = insights.platformStats[platform.id];
-                                const Icon = platform.icon;
-                                return (
-                                    <div key={platform.id} className="platform-performance-card">
-                                        <div className="platform-header">
-                                            <div className="platform-icon-large" style={{ color: platform.color }}>
-                                                <Icon size={32} />
-                                            </div>
-                                            <div className="platform-stats-info">
-                                                <span className="platform-name">{platform.name}</span>
-                                                <span className="platform-posts-count">{stats.posts} posts</span>
-                                            </div>
-                                        </div>
-                                        <div className="platform-metrics">
-                                            <div className="metric">
-                                                <span className="metric-label">Reach</span>
-                                                <span className="metric-value">{stats.reach.toLocaleString()}</span>
-                                            </div>
-                                            <div className="metric">
-                                                <span className="metric-label">Engagement</span>
-                                                <span className="metric-value">{stats.engagement.toLocaleString()}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    {/* Post Insights Table */}
-                    <div className="card">
-                        <div className="card-header">
-                            <h3 className="card-title">Post Performance</h3>
-                        </div>
-                        <div className="table-container">
-                            <table className="table">
-                                <thead>
-                                    <tr>
-                                        <th>Post</th>
-                                        <th>Platforms</th>
-                                        <th>Reach</th>
-                                        <th>Engagement</th>
-                                        <th>Likes</th>
-                                        <th>Comments</th>
-                                        <th>Shares</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {posts.filter(p => p.insights).map(post => (
-                                        <tr key={post.id}>
-                                            <td>
-                                                <div className="post-content-cell">
-                                                    {post.content.substring(0, 50)}...
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <div className="platform-badges">
-                                                    {post.platforms.map(platformId => {
-                                                        const platform = platforms.find(p => p.id === platformId);
-                                                        const Icon = platform?.icon || Share2;
-                                                        return (
-                                                            <span
-                                                                key={platformId}
-                                                                className="platform-badge-small"
-                                                                style={{ color: platform?.color }}
-                                                                title={platform?.name}
-                                                            >
-                                                                <Icon size={14} />
-                                                            </span>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </td>
-                                            <td>{post.insights.reach.toLocaleString()}</td>
-                                            <td>{post.insights.engagement.toLocaleString()}</td>
-                                            <td>{post.insights.likes.toLocaleString()}</td>
-                                            <td>{post.insights.comments.toLocaleString()}</td>
-                                            <td>{post.insights.shares.toLocaleString()}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </>
-            )}
-        </div>
+        <InsightsView
+            insights={insights}
+            platforms={platforms}
+        />
     );
 
     const handleTogglePipeline = async () => {
@@ -919,36 +647,6 @@ function SocialMediaAutomation({
         alert('Webhook secret copied to clipboard!');
     };
 
-    const checkWebhookConnection = async () => {
-        setWebhookConnectionStatus('checking');
-        setLoading(true);
-        
-        try {
-            // TODO: Replace with actual API call to test webhook connection
-            // const response = await socialMediaAPI.testWebhookConnection();
-            
-            // Simulate API call
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // Simulate success (in real implementation, check actual response)
-            const isConnected = pipelineEnabled; // Check if pipeline is enabled
-            setWebhookConnectionStatus(isConnected ? 'connected' : 'disconnected');
-            setWebhookLastChecked(new Date());
-            
-            if (isConnected) {
-                alert('Webhook connection is active and working!');
-            } else {
-                alert('Webhook connection is inactive. Please enable the pipeline first.');
-            }
-        } catch (error) {
-            console.error('Error checking webhook connection:', error);
-            setWebhookConnectionStatus('error');
-            setWebhookLastChecked(new Date());
-            alert('Failed to check webhook connection. Please try again.');
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const sendTestWebhook = async () => {
         if (!pipelineEnabled) {
@@ -1021,645 +719,38 @@ function SocialMediaAutomation({
         }
     };
 
-    const renderPipelineView = () => {
-        const allWebhookPosts = [...(webhookPosts || []), ...(posts || []).filter(p => p.source === 'webhook')];
-        const pipelineStats = {
-            totalWebhookPosts: allWebhookPosts.length,
-            successfulPosts: allWebhookPosts.filter(p => p.status === 'published').length,
-            failedPosts: allWebhookPosts.filter(p => p.status === 'failed').length,
-            pendingPosts: allWebhookPosts.filter(p => p.status === 'scheduled' || p.status === 'pending').length
-        };
-
-        return (
-            <div className="pipeline-view">
-                {/* Pipeline Status Card */}
-                <div className={`card pipeline-main-card ${pipelineEnabled ? 'pipeline-active' : 'pipeline-inactive'}`}>
-                    <div className="card-header pipeline-header">
-                        <div className="card-header-left">
-                            <div className="pipeline-title-section">
-                                <div className="pipeline-icon-wrapper">
-                                    <GitBranch size={28} />
-                                    {pipelineEnabled && (
-                                        <span className="pipeline-pulse"></span>
-                                    )}
-                                </div>
-                                <div>
-                                    <h3 className="card-title">
-                                        Automation Pipeline
-                                    </h3>
-                                    <p className="card-description">
-                                        Monitor and manage automated posts from webhooks
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="pipeline-toggle-container">
-                            <div className="pipeline-status-indicator">
-                                <div className={`status-dot ${pipelineEnabled ? 'active' : 'inactive'}`}></div>
-                                <span className={`status-text ${pipelineEnabled ? 'active' : 'inactive'}`}>
-                                    {pipelineEnabled ? 'Active' : 'Inactive'}
-                                </span>
-                            </div>
-                            <label className="pipeline-toggle-label">
-                                <button
-                                    className={`pipeline-toggle-btn ${pipelineEnabled ? 'enabled' : 'disabled'}`}
-                                    onClick={handleTogglePipeline}
-                                    disabled={loading}
-                                    title={pipelineEnabled ? 'Disable Pipeline' : 'Enable Pipeline'}
-                                >
-                                    <div className="toggle-slider">
-                                        <div className="toggle-handle"></div>
-                                    </div>
-                                    <span className="toggle-label">
-                                        {pipelineEnabled ? 'ON' : 'OFF'}
-                                    </span>
-                                </button>
-                            </label>
-                        </div>
-                    </div>
-                    
-                    {pipelineEnabled && (
-                        <div className="card-body">
-                            {/* Webhook Configuration */}
-                            <div className="webhook-config-section">
-                                <div className="section-header">
-                                    <div className="section-icon">
-                                        <Webhook size={24} />
-                                    </div>
-                                    <div>
-                                        <h4>Webhook Configuration</h4>
-                                        <p className="section-subtitle">Configure your webhook endpoint for automated posts</p>
-                                    </div>
-                                </div>
-                                <div className="webhook-info-grid">
-                                    <div className="webhook-info-card enhanced">
-                                        <div className="webhook-card-header">
-                                            <div className="webhook-info-header">
-                                                <div className="webhook-icon-wrapper">
-                                                    <Webhook size={22} />
-                                                </div>
-                                                <div>
-                                                    <span className="webhook-label">Webhook URL</span>
-                                                    <span className="webhook-badge">Public</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="webhook-url-container enhanced">
-                                            <code className="webhook-url">{webhookUrl}</code>
-                                            <button
-                                                className={`btn-icon btn-copy enhanced ${webhookCopied ? 'copied' : ''}`}
-                                                onClick={copyWebhookUrl}
-                                                title="Copy URL"
-                                            >
-                                                {webhookCopied ? (
-                                                    <>
-                                                        <Check size={18} />
-                                                        <span className="copy-feedback">Copied!</span>
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <CopyIcon size={18} />
-                                                        <span className="copy-feedback">Copy</span>
-                                                    </>
-                                                )}
-                                            </button>
-                                        </div>
-                                        <div className="webhook-hint-box">
-                                            <Activity size={14} />
-                                            <small>Use this URL to receive property listings and automatically post to social media</small>
-                                        </div>
-                                        <div className="webhook-example-section">
-                                            <strong>Example Payload:</strong>
-                                            <pre className="webhook-example-code">
-{`{
-  "type": "property_listing",
-  "property": {
-    "title": "Luxury 3BHK Apartment",
-    "location": "Mumbai, Maharashtra",
-    "price": "₹2.5 Crores",
-    "area": "1500 sq ft",
-    "bedrooms": 3,
-    "bathrooms": 2,
-    "description": "Beautiful apartment...",
-    "imageUrl": "https://...",
-    "propertyUrl": "https://..."
-  },
-  "platforms": ["facebook", "twitter"],
-  "postImmediately": true
-}`}
-                                            </pre>
-                                        </div>
-                                    </div>
-                                    
-                                    <div className="webhook-info-card enhanced">
-                                        <div className="webhook-card-header">
-                                            <div className="webhook-info-header">
-                                                <div className="webhook-icon-wrapper">
-                                                    <Activity size={22} />
-                                                </div>
-                                                <div>
-                                                    <span className="webhook-label">Webhook Secret</span>
-                                                    <span className="webhook-badge secret">Secret</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="webhook-secret-container enhanced">
-                                            <code className="webhook-secret">
-                                                {webhookSecret.substring(0, 20)}...
-                                            </code>
-                                            <button
-                                                className="btn-icon btn-copy enhanced"
-                                                onClick={copyWebhookSecret}
-                                                title="Copy Secret"
-                                            >
-                                                <CopyIcon size={18} />
-                                                <span className="copy-feedback">Copy</span>
-                                            </button>
-                                        </div>
-                                        <div className="webhook-hint-box">
-                                            <AlertTriangle size={14} />
-                                            <small>Keep this secret secure. Use it to verify webhook requests.</small>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Pipeline Statistics */}
-                            <div className="pipeline-stats-section">
-                                <div className="stats-section-header">
-                                    <h4>Pipeline Statistics</h4>
-                                    <span className="stats-update-time">Updated just now</span>
-                                </div>
-                                <div className="pipeline-stats-grid">
-                                    <div className="pipeline-stat-card enhanced">
-                                        <div className="stat-icon-wrapper" style={{ background: 'linear-gradient(135deg, var(--primary) 0%, #8B0000 100%)' }}>
-                                            <Webhook size={24} />
-                                        </div>
-                                        <div className="stat-content">
-                                            <span className="stat-label">Total Webhook Posts</span>
-                                            <span className="stat-value">{pipelineStats.totalWebhookPosts}</span>
-                                            <div className="stat-trend">
-                                                <TrendingUp size={12} />
-                                                <span>All time</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="pipeline-stat-card enhanced success">
-                                        <div className="stat-icon-wrapper" style={{ background: 'linear-gradient(135deg, var(--primary) 0%, #8B0000 100%)' }}>
-                                            <CheckCircle size={24} />
-                                        </div>
-                                        <div className="stat-content">
-                                            <span className="stat-label">Successful</span>
-                                            <span className="stat-value">{pipelineStats.successfulPosts}</span>
-                                            <div className="stat-trend positive">
-                                                <TrendingUp size={12} />
-                                                <span>{pipelineStats.totalWebhookPosts > 0 ? Math.round((pipelineStats.successfulPosts / pipelineStats.totalWebhookPosts) * 100) : 0}% success rate</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="pipeline-stat-card enhanced warning">
-                                        <div className="stat-icon-wrapper" style={{ background: 'linear-gradient(135deg, #8B0000 0%, var(--primary) 100%)' }}>
-                                            <Clock size={24} />
-                                        </div>
-                                        <div className="stat-content">
-                                            <span className="stat-label">Pending</span>
-                                            <span className="stat-value">{pipelineStats.pendingPosts}</span>
-                                            <div className="stat-trend">
-                                                <Clock size={12} />
-                                                <span>In queue</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div className="pipeline-stat-card enhanced danger">
-                                        <div className="stat-icon-wrapper" style={{ background: 'linear-gradient(135deg, #8B0000 0%, var(--primary) 100%)' }}>
-                                            <AlertCircle size={24} />
-                                        </div>
-                                        <div className="stat-content">
-                                            <span className="stat-label">Failed</span>
-                                            <span className="stat-value">{pipelineStats.failedPosts}</span>
-                                            <div className="stat-trend negative">
-                                                <AlertCircle size={12} />
-                                                <span>{pipelineStats.failedPosts > 0 ? 'Needs attention' : 'No errors'}</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {!pipelineEnabled && (
-                        <div className="card-body">
-                            <div className="pipeline-inactive-state enhanced">
-                                <div className="inactive-icon-wrapper">
-                                    <GitBranch size={64} />
-                                    <div className="inactive-overlay"></div>
-                                </div>
-                                <div className="inactive-content">
-                                    <h3>Pipeline is Inactive</h3>
-                                    <p>Enable the automation pipeline to start receiving posts from webhooks and automate your social media posting workflow.</p>
-                                    <button
-                                        className="btn btn-primary btn-large"
-                                        onClick={handleTogglePipeline}
-                                        disabled={loading}
-                                    >
-                                        <Zap size={20} />
-                                        <span>Enable Pipeline</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Webhook Posts List */}
-                {pipelineEnabled && (
-                    <div className="card">
-                        <div className="card-header">
-                            <h3 className="card-title">
-                                <Webhook size={24} />
-                                Webhook Posts
-                            </h3>
-                            <span className="card-badge">{allWebhookPosts.length} posts</span>
-                        </div>
-                        <div className="card-body">
-                            {allWebhookPosts.length === 0 ? (
-                                <div className="empty-state">
-                                    <Webhook size={64} style={{ opacity: 0.3 }} />
-                                    <h3>No webhook posts yet</h3>
-                                    <p>Posts received via webhook will appear here</p>
-                                </div>
-                            ) : (
-                                <div className="webhook-posts-list">
-                                    {allWebhookPosts.map(post => {
-                                        const isSelected = selectedPosts.includes(post.id);
-                                        return (
-                                            <div key={post.id} className={`post-card webhook-post ${isSelected ? 'selected' : ''}`}>
-                                                <div className="post-card-checkbox">
-                                                    <button
-                                                        className="post-select-btn"
-                                                        onClick={() => togglePostSelection(post.id)}
-                                                    >
-                                                        {isSelected ? (
-                                                            <CheckSquare size={18} />
-                                                        ) : (
-                                                            <Square size={18} />
-                                                        )}
-                                                    </button>
-                                                </div>
-                                                <div className="webhook-post-badge">
-                                                    <Webhook size={14} />
-                                                    <span>{post.propertyData ? 'Property Listing' : 'Webhook'}</span>
-                                                    {post.webhookId && (
-                                                        <span className="webhook-id">ID: {post.webhookId}</span>
-                                                    )}
-                                                </div>
-                                                {post.propertyData && (
-                                                    <div className="property-data-badge">
-                                                        <div className="property-icon">
-                                                            <Share2 size={14} />
-                                                        </div>
-                                                        <div className="property-info">
-                                                            <span className="property-title">{post.propertyData.title}</span>
-                                                            <span className="property-location">{post.propertyData.location}</span>
-                                                        </div>
-                                                        <div className="property-price">{post.propertyData.price}</div>
-                                                    </div>
-                                                )}
-                                                <div className="post-card-header">
-                                                    <div className="post-platforms">
-                                                        {post.platforms.map(platformId => {
-                                                            const platform = platforms.find(p => p.id === platformId);
-                                                            const Icon = platform?.icon || Share2;
-                                                            return (
-                                                                <div
-                                                                    key={platformId}
-                                                                    className="platform-badge"
-                                                                    style={{ backgroundColor: platform?.color + '20', color: platform?.color }}
-                                                                    title={platform?.name}
-                                                                >
-                                                                    <Icon size={16} />
-                                                                </div>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                    {getStatusBadge(post.status)}
-                                                </div>
-                                                <div className="post-card-content">
-                                                    <p>{post.content}</p>
-                                                    {post.image && (
-                                                        <div className="post-image-preview">
-                                                            <ImageIcon size={20} />
-                                                            <span>Image attached</span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div className="post-card-footer">
-                                                    <div className="post-meta">
-                                                        <div className="meta-item">
-                                                            <Calendar size={14} />
-                                                            <span>
-                                                                {post.status === 'published' && post.publishedDate
-                                                                    ? formatDateTime(post.publishedDate)
-                                                                    : formatDateTime(post.scheduledDate)
-                                                                }
-                                                            </span>
-                                                        </div>
-                                                        {post.receivedAt && (
-                                                            <div className="meta-item">
-                                                                <Webhook size={14} />
-                                                                <span>Received: {formatDateTime(post.receivedAt)}</span>
-                                                            </div>
-                                                        )}
-                                                        {post.insights && (
-                                                            <div className="post-insights-preview">
-                                                                <Eye size={14} /> {post.insights.reach}
-                                                                <Heart size={14} /> {post.insights.likes}
-                                                                <MessageCircle size={14} /> {post.insights.comments}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                    <div className="post-actions">
-                                                        <button
-                                                            className="action-btn action-btn-edit"
-                                                            onClick={() => handleEditPost(post)}
-                                                            title="View Details"
-                                                        >
-                                                            <Eye size={16} />
-                                                        </button>
-                                                        <button
-                                                            className="action-btn action-btn-delete"
-                                                            onClick={() => handleDeletePost(post.id)}
-                                                            title="Delete"
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                )}
-            </div>
-        );
-    };
-
-    const renderSettingsView = () => (
-        <div className="settings-view">
-            {/* Webhook Connection Check */}
-            <div className="card webhook-connection-card">
-                <div className="card-header">
-                    <div className="webhook-settings-header">
-                        <div className="webhook-settings-icon-wrapper">
-                            <Webhook size={28} />
-                        </div>
-                        <div>
-                            <h3 className="card-title">Webhook Connection</h3>
-                            <p className="card-description">Test and verify your webhook connection status</p>
-                        </div>
-                    </div>
-                </div>
-                <div className="card-body">
-                    <div className="webhook-connection-section-enhanced">
-                        {/* Status Card */}
-                        <div className="webhook-status-card">
-                            <div className="webhook-status-header-enhanced">
-                                <div className="status-header-left">
-                                    <div className="status-icon-wrapper">
-                                        {webhookConnectionStatus === 'checking' && (
-                                            <RefreshCw size={24} className="spinning" />
-                                        )}
-                                        {webhookConnectionStatus === 'connected' && (
-                                            <CheckCircle size={24} />
-                                        )}
-                                        {webhookConnectionStatus === 'disconnected' && (
-                                            <AlertCircle size={24} />
-                                        )}
-                                        {webhookConnectionStatus === 'error' && (
-                                            <X size={24} />
-                                        )}
-                                        {!webhookConnectionStatus && (
-                                            <Activity size={24} />
-                                        )}
-                                    </div>
-                                    <div>
-                                        <span className="webhook-status-label-enhanced">Connection Status</span>
-                                        {webhookConnectionStatus && (
-                                            <span className={`webhook-status-badge-enhanced ${webhookConnectionStatus}`}>
-                                                {webhookConnectionStatus === 'checking' && 'Checking...'}
-                                                {webhookConnectionStatus === 'connected' && 'Connected'}
-                                                {webhookConnectionStatus === 'disconnected' && 'Disconnected'}
-                                                {webhookConnectionStatus === 'error' && 'Error'}
-                                            </span>
-                                        )}
-                                        {!webhookConnectionStatus && (
-                                            <span className="webhook-status-badge-enhanced not-checked">Not Checked</span>
-                                        )}
-                                    </div>
-                                </div>
-                                {webhookLastChecked && (
-                                    <div className="status-timestamp">
-                                        <Clock size={14} />
-                                        <span>Last checked: {formatDateTime(webhookLastChecked)}</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-
-                        {/* Configuration Details */}
-                        <div className="webhook-config-details-grid">
-                            <div className="webhook-config-detail-card">
-                                <div className="config-detail-header">
-                                    <Webhook size={18} />
-                                    <span>Webhook URL</span>
-                                </div>
-                                <div className="config-detail-content">
-                                    <code className="config-detail-value">{webhookUrl || 'Not configured'}</code>
-                                </div>
-                            </div>
-                            <div className="webhook-config-detail-card">
-                                <div className="config-detail-header">
-                                    <GitBranch size={18} />
-                                    <span>Pipeline Status</span>
-                                </div>
-                                <div className="config-detail-content">
-                                    <span className={`config-detail-value status-indicator ${pipelineEnabled ? 'enabled' : 'disabled'}`}>
-                                        <div className={`status-dot-small ${pipelineEnabled ? 'active' : 'inactive'}`}></div>
-                                        {pipelineEnabled ? 'Enabled' : 'Disabled'}
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        {/* Action Buttons */}
-                        <div className="webhook-actions-container">
-                            <div className="actions-header">
-                                <h4>Quick Actions</h4>
-                                <p>Test and manage your webhook connection</p>
-                            </div>
-                            <div className="webhook-connection-actions-enhanced">
-                                <button
-                                    className="btn-action-primary"
-                                    onClick={checkWebhookConnection}
-                                    disabled={loading || webhookConnectionStatus === 'checking'}
-                                >
-                                    <div className="btn-icon-wrapper">
-                                        {webhookConnectionStatus === 'checking' ? (
-                                            <RefreshCw size={20} className="spinning" />
-                                        ) : (
-                                            <Activity size={20} />
-                                        )}
-                                    </div>
-                                    <div className="btn-content">
-                                        <span className="btn-label">
-                                            {webhookConnectionStatus === 'checking' ? 'Checking...' : 'Check Connection'}
-                                        </span>
-                                        <span className="btn-description">Verify webhook connectivity</span>
-                                    </div>
-                                </button>
-                                <button
-                                    className="btn-action-secondary"
-                                    onClick={sendTestWebhook}
-                                    disabled={loading || !pipelineEnabled}
-                                    title={!pipelineEnabled ? 'Enable pipeline first to send test webhook' : 'Send a test webhook'}
-                                >
-                                    <div className="btn-icon-wrapper">
-                                        <Zap size={20} />
-                                    </div>
-                                    <div className="btn-content">
-                                        <span className="btn-label">Send Test Webhook</span>
-                                        <span className="btn-description">Test webhook functionality</span>
-                                    </div>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    {/* Status Messages */}
-                    {webhookConnectionStatus === 'connected' && (
-                        <div className="webhook-status-message success">
-                            <div className="message-icon">
-                                <CheckCircle size={24} />
-                            </div>
-                            <div className="message-content">
-                                <strong>Webhook is active!</strong>
-                                <p>Your webhook endpoint is ready to receive automated posts. Posts sent to this webhook will appear in the Pipeline tab.</p>
-                            </div>
-                        </div>
-                    )}
-                    
-                    {webhookConnectionStatus === 'disconnected' && (
-                        <div className="webhook-status-message warning">
-                            <div className="message-icon">
-                                <AlertCircle size={24} />
-                            </div>
-                            <div className="message-content">
-                                <strong>Webhook is inactive</strong>
-                                <p>Enable the automation pipeline in the Pipeline tab to activate webhook receiving.</p>
-                            </div>
-                        </div>
-                    )}
-                    
-                    {webhookConnectionStatus === 'error' && (
-                        <div className="webhook-status-message error">
-                            <div className="message-icon">
-                                <X size={24} />
-                            </div>
-                            <div className="message-content">
-                                <strong>Connection check failed</strong>
-                                <p>Unable to verify webhook connection. Please check your configuration and try again.</p>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* Connected Platforms */}
-            <div className="card">
-                <div className="card-header">
-                    <h3 className="card-title">Connected Platforms</h3>
-                    <p className="card-description">Manage your social media platform connections</p>
-                </div>
-                <div className="platforms-settings">
-                    {platforms.map(platform => {
-                        const Icon = platform.icon;
-                        return (
-                            <div key={platform.id} className="platform-setting-card-enhanced">
-                                <div className="platform-card-content">
-                                    <div className="platform-info-enhanced">
-                                        <div className="platform-icon-wrapper-enhanced" style={{ backgroundColor: platform.color + '15', borderColor: platform.color + '40' }}>
-                                            <Icon size={28} style={{ color: platform.color }} />
-                                        </div>
-                                        <div className="platform-details">
-                                            <div className="platform-name-row">
-                                                <span className="platform-name-enhanced">{platform.name}</span>
-                                                <span className={`connection-status-badge ${platform.connected ? 'connected' : 'disconnected'}`}>
-                                                    <div className={`status-indicator-dot ${platform.connected ? 'active' : 'inactive'}`}></div>
-                                                    {platform.connected ? 'Connected' : 'Not Connected'}
-                                                </span>
-                                            </div>
-                                            {platform.connected && (
-                                                <div className="platform-meta">
-                                                    <span className="platform-meta-item">
-                                                        <CheckCircle size={12} />
-                                                        <span>Business API</span>
-                                                    </span>
-                                                    <span className="platform-meta-item">
-                                                        <Clock size={12} />
-                                                        <span>Last synced: {new Date().toLocaleDateString()}</span>
-                                                    </span>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="platform-action-wrapper">
-                                        <button
-                                            className={`platform-action-btn ${platform.connected ? 'connected' : 'disconnected'}`}
-                                            onClick={() => {
-                                                // TODO: Implement connect/disconnect
-                                                alert(`${platform.connected ? 'Disconnect' : 'Connect'} ${platform.name} - API integration needed`);
-                                            }}
-                                        >
-                                            {platform.connected ? (
-                                                <>
-                                                    <X size={16} />
-                                                    <span>Disconnect</span>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Plus size={16} />
-                                                    <span>Connect</span>
-                                                </>
-                                            )}
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        </div>
+    const renderPipelineView = () => (
+        <PipelineView
+            pipelineEnabled={pipelineEnabled}
+            onTogglePipeline={handleTogglePipeline}
+            webhookUrl={webhookUrl}
+            webhookSecret={webhookSecret}
+            webhookCopied={webhookCopied}
+            onCopyWebhookUrl={copyWebhookUrl}
+            onCopyWebhookSecret={copyWebhookSecret}
+            webhookPosts={webhookPosts}
+            posts={posts}
+            platforms={platforms}
+            selectedPosts={selectedPosts}
+            onToggleSelection={togglePostSelection}
+            onPreview={(post) => {
+                // TODO: Implement preview
+                alert('Preview: ' + post.content.substring(0, 50));
+            }}
+            onEdit={handleEditPost}
+            onDelete={handleDeletePost}
+            onToggleStatus={handleToggleStatus}
+            loading={loading}
+            onSendTestWebhook={sendTestWebhook}
+        />
     );
+
 
     return (
         <div className="social-media-automation">
             {/* Header */}
             <div className="card">
-                <div className="card-header">
-                    <div className="card-header-left">
-                        <h2 className="card-title">
-                            <Share2 size={24} />
-                            Social Media Automation
-                        </h2>
-                        <p className="card-description">
-                            Manage, schedule, and analyze your social media posts across all platforms
-                        </p>
-                    </div>
+                <div className="card-header" style={{ justifyContent: 'flex-end' }}>
                     <div className="card-header-actions">
                         <button 
                             className="btn btn-primary" 
@@ -1710,13 +801,6 @@ function SocialMediaAutomation({
                             </span>
                         )}
                     </button>
-                    <button
-                        className={`tab ${activeTab === 'settings' ? 'active' : ''}`}
-                        onClick={() => setActiveTab('settings')}
-                    >
-                        <Settings size={18} />
-                        Settings
-                    </button>
                 </div>
             </div>
 
@@ -1726,7 +810,6 @@ function SocialMediaAutomation({
                 {activeTab === 'calendar' && renderCalendarView()}
                 {activeTab === 'insights' && renderInsightsView()}
                 {activeTab === 'pipeline' && renderPipelineView()}
-                {activeTab === 'settings' && renderSettingsView()}
             </div>
 
             {/* Create/Edit Post Modal */}

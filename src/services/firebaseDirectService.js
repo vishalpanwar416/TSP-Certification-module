@@ -38,6 +38,10 @@ export const contactsService = {
      */
     async getAll() {
         try {
+            if (!db) {
+                console.error('[Firebase Direct Service] Database not initialized');
+                return [];
+            }
             // Simple query without orderBy to avoid index requirements
             const querySnapshot = await getDocs(collection(db, COLLECTIONS.CONTACTS));
             const contacts = querySnapshot.docs.map(doc => ({
@@ -51,8 +55,11 @@ export const contactsService = {
                 return dateB - dateA;
             });
         } catch (error) {
-            console.error('Error fetching contacts:', error);
-            throw error;
+            console.error('[Firebase Direct Service] Error fetching contacts:', error);
+            console.error('[Firebase Direct Service] Error code:', error.code);
+            console.error('[Firebase Direct Service] Error message:', error.message);
+            // Return empty array instead of throwing to prevent white screen
+            return [];
         }
     },
 
@@ -208,6 +215,10 @@ export const campaignsService = {
      */
     async getAll(filters = {}) {
         try {
+            if (!db) {
+                console.error('[Firebase Direct Service] Database not initialized');
+                return [];
+            }
             // Simple query without orderBy to avoid index requirements
             const querySnapshot = await getDocs(collection(db, COLLECTIONS.CAMPAIGNS));
             let campaigns = querySnapshot.docs.map(doc => ({
@@ -230,8 +241,11 @@ export const campaignsService = {
                 return dateB - dateA;
             });
         } catch (error) {
-            console.error('Error fetching campaigns:', error);
-            throw error;
+            console.error('[Firebase Direct Service] Error fetching campaigns:', error);
+            console.error('[Firebase Direct Service] Error code:', error.code);
+            console.error('[Firebase Direct Service] Error message:', error.message);
+            // Return empty array instead of throwing to prevent white screen
+            return [];
         }
     },
 
@@ -312,6 +326,10 @@ export const templatesService = {
      */
     async getAll(type = null) {
         try {
+            if (!db) {
+                console.error('[Firebase Direct Service] Database not initialized');
+                return [];
+            }
             // Simple query without orderBy to avoid index requirements
             const querySnapshot = await getDocs(collection(db, COLLECTIONS.TEMPLATES));
             let templates = querySnapshot.docs.map(doc => ({
@@ -331,8 +349,11 @@ export const templatesService = {
                 return dateB - dateA;
             });
         } catch (error) {
-            console.error('Error fetching templates:', error);
-            throw error;
+            console.error('[Firebase Direct Service] Error fetching templates:', error);
+            console.error('[Firebase Direct Service] Error code:', error.code);
+            console.error('[Firebase Direct Service] Error message:', error.message);
+            // Return empty array instead of throwing to prevent white screen
+            return [];
         }
     },
 

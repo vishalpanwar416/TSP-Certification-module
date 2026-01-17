@@ -14,6 +14,7 @@ import CertificatePreviewModal from './CertificatePreviewModal';
 import CreateCertificateModal from './CreateCertificateModal';
 import SendCertificateModal from './SendCertificateModal';
 import SocialMediaAutomation from './SocialMediaAutomation';
+import Settings from './Settings';
 
 function Dashboard() {
     const { logout, user } = useAuth();
@@ -204,6 +205,8 @@ function Dashboard() {
                 <main className="content-area">
                     {activeTab === 'social-media' ? (
                         <SocialMediaAutomation />
+                    ) : activeTab === 'settings' ? (
+                        <Settings />
                     ) : (
                         <>
                             <WelcomeBanner

@@ -14,7 +14,17 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+
+// Initialize analytics only if in browser and not in development (handles errors gracefully)
+let analytics = null;
+if (typeof window !== 'undefined') {
+  try {
+    analytics = getAnalytics(app);
+  } catch (error) {
+    console.warn('Firebase Analytics initialization failed (this is normal in some environments):', error.message);
+  }
+}
+
 const auth = getAuth(app);
 const db = getFirestore(app);
 

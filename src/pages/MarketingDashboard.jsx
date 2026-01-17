@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { API_BASE_URL } from '../utils/api';
+import { API_BASE_URL } from '../utils/api'; // Still needed for certificates API
 import {
     Send,
     Download,
@@ -46,12 +46,14 @@ import {
     Image,
     Star,
     RefreshCw,
-    Share2
+    Share2,
+    Settings
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import SocialMediaAutomation from '../components/SocialMediaAutomation';
 import { useAuth } from '../contexts/AuthContext';
-import firebaseService from '../services/marketingService';
+// Use direct Firestore service instead of API-based service
+import firebaseService from '../services/firebaseDirectService';
 import messagingService from '../services/messagingService';
 import notificationsService from '../services/notificationsService';
 import { certificateAPI } from '../services/api';
@@ -958,9 +960,40 @@ function MarketingDashboard() {
 
     // Load data from Firebase on mount
     useEffect(() => {
+        console.log('[MarketingDashboard] Component mounted');
+        console.log('[MarketingDashboard] Firebase service available:', !!firebaseService);
+        console.log('[MarketingDashboard] Contacts service available:', !!firebaseService?.contacts);
         console.log('[API DEBUG] Using Base URL:', API_BASE_URL);
-        loadDataFromFirebase();
-        loadNotifications();
+        
+        let isMounted = true;
+        
+        // Set loading to false after a short delay to ensure UI renders
+        const timeout = setTimeout(() => {
+            if (isMounted) {
+                console.warn('[MarketingDashboard] Loading timeout - forcing UI to render');
+                setLoading(false);
+            }
+        }, 3000);
+        
+        // Wrap in try-catch to prevent crashes
+        const loadData = async () => {
+            try {
+                await loadDataFromFirebase();
+                await loadNotifications();
+            } catch (error) {
+                console.error('[MarketingDashboard] Error in useEffect:', error);
+                if (isMounted) {
+                    setLoading(false);
+                }
+            }
+        };
+        
+        loadData();
+        
+        return () => {
+            isMounted = false;
+            clearTimeout(timeout);
+        };
     }, []);
 
     // Load notifications from backend
@@ -1024,62 +1057,113 @@ function MarketingDashboard() {
 
     const loadDataFromFirebase = async () => {
         setLoading(true);
+        const errors = [];
+        let loadedContacts = [];
+        let loadedCampaigns = [];
+        let loadedTemplates = [];
+        let loadedCertificates = [];
+        
         try {
-            console.log('[DEBUG] Starting to load data from API...');
-            console.log('[DEBUG] API Base URL:', API_BASE_URL);
+            console.log('[DEBUG] Starting to load data from Firestore...');
+            console.log('[DEBUG] Using direct Firestore access (no API required)');
+            console.log('[DEBUG] Firebase service available:', !!firebaseService);
+            console.log('[DEBUG] Contacts service available:', !!firebaseService?.contacts);
             
-            // Load contacts
-            console.log('[DEBUG] Loading contacts...');
-            const contactsData = await firebaseService.contacts.getAll();
-            console.log('[DEBUG] Contacts loaded:', contactsData?.length || 0, 'items');
-            setContacts(contactsData || []);
-
-            // Load campaigns
-            console.log('[DEBUG] Loading campaigns...');
-            const campaignsData = await firebaseService.campaigns.getAll();
-            console.log('[DEBUG] Campaigns loaded:', campaignsData?.length || 0, 'items');
-            setCampaigns(campaignsData || []);
-
-            // Load templates
-            console.log('[DEBUG] Loading templates...');
-            const templatesData = await firebaseService.templates.getAll();
-            console.log('[DEBUG] Templates loaded:', templatesData?.length || 0, 'items');
-            setTemplates(templatesData || []);
-
-            // Load certificates
-            console.log('[DEBUG] Loading certificates...');
+            // Load contacts - with individual error handling
             try {
+                console.log('[DEBUG] Loading contacts from Firestore...');
+                if (!firebaseService?.contacts) {
+                    throw new Error('Contacts service not available');
+                }
+                const contactsData = await firebaseService.contacts.getAll();
+                console.log('[DEBUG] Contacts loaded:', contactsData?.length || 0, 'items');
+                loadedContacts = Array.isArray(contactsData) ? contactsData : [];
+                setContacts(loadedContacts);
+            } catch (error) {
+                console.error('[ERROR] Error loading contacts:', error);
+                console.error('[ERROR] Contact error details:', error.message, error.code);
+                console.error('[ERROR] Contact error stack:', error.stack);
+                errors.push('contacts');
+                setContacts([]);
+            }
+
+            // Load campaigns - with individual error handling
+            try {
+                console.log('[DEBUG] Loading campaigns from Firestore...');
+                const campaignsData = await firebaseService.campaigns.getAll();
+                console.log('[DEBUG] Campaigns loaded:', campaignsData?.length || 0, 'items');
+                loadedCampaigns = Array.isArray(campaignsData) ? campaignsData : [];
+                setCampaigns(loadedCampaigns);
+            } catch (error) {
+                console.error('[ERROR] Error loading campaigns:', error);
+                console.error('[ERROR] Campaign error details:', error.message, error.code);
+                errors.push('campaigns');
+                setCampaigns([]);
+            }
+
+            // Load templates - with individual error handling
+            try {
+                console.log('[DEBUG] Loading templates from Firestore...');
+                const templatesData = await firebaseService.templates.getAll();
+                console.log('[DEBUG] Templates loaded:', templatesData?.length || 0, 'items');
+                loadedTemplates = Array.isArray(templatesData) ? templatesData : [];
+                setTemplates(loadedTemplates);
+            } catch (error) {
+                console.error('[ERROR] Error loading templates:', error);
+                console.error('[ERROR] Template error details:', error.message, error.code);
+                errors.push('templates');
+                setTemplates([]);
+            }
+
+            // Load certificates - with individual error handling
+            try {
+                console.log('[DEBUG] Loading certificates...');
                 const certificatesData = await certificateAPI.getAll();
                 console.log('[DEBUG] Certificates loaded:', certificatesData?.length || 0, 'items');
-                setCertificates(Array.isArray(certificatesData) ? certificatesData : []);
+                loadedCertificates = Array.isArray(certificatesData) ? certificatesData : [];
+                setCertificates(loadedCertificates);
             } catch (error) {
                 console.error('[ERROR] Error loading certificates:', error);
                 console.error('[ERROR] Certificate error details:', error.message, error.stack);
+                errors.push('certificates');
                 setCertificates([]);
             }
 
-            // Update stats
-            updateStats(contactsData || [], campaignsData || []);
-            console.log('[DEBUG] Data loading completed successfully');
+            // Update stats with whatever data we successfully loaded
+            updateStats(loadedContacts, loadedCampaigns);
+            
+            // Only show alert if ALL data loading failed
+            if (errors.length === 4) {
+                console.error('[ERROR] All data loading failed');
+                console.error('[ERROR] This might be due to:');
+                console.error('[ERROR] 1. Firestore not initialized');
+                console.error('[ERROR] 2. Firestore security rules blocking access');
+                console.error('[ERROR] 3. Network connectivity issues');
+                console.error('[ERROR] 4. Collections do not exist in Firestore');
+                // Don't show alert - just log to console to prevent blocking UI
+                // alert(`Failed to load data: ${errorMsg}\n\nPlease check:\n1. Is the backend server running?\n2. Is the API URL correct? (Check console for [API Config])\n3. Check browser console for more details.`);
+            } else if (errors.length > 0) {
+                console.warn(`[WARNING] Some data failed to load: ${errors.join(', ')}. The app will continue with available data.`);
+                // Don't show alert for partial failures - just log to console
+            } else {
+                console.log('[DEBUG] Data loading completed successfully');
+            }
         } catch (error) {
-            console.error('[ERROR] Error loading data from Firebase:', error);
+            // This catch is for unexpected errors
+            console.error('[ERROR] Unexpected error loading data:', error);
             console.error('[ERROR] Error details:', error.message, error.stack);
             console.error('[ERROR] API Base URL was:', API_BASE_URL);
             console.error('[ERROR] Error response:', error.response);
             
-            // Show user-friendly error message
-            const errorMsg = error.response?.data?.error || 
-                            error.response?.data?.message || 
-                            error.message || 
-                            'Failed to load data from backend';
-            
-            alert(`Failed to load data: ${errorMsg}\n\nPlease check:\n1. Is the backend server running?\n2. Is the API URL correct? (Check console for [API Config])\n3. Check browser console for more details.`);
-            
-            // Set empty arrays to prevent UI errors
-            setContacts([]);
-            setCampaigns([]);
-            setTemplates([]);
-            setCertificates([]);
+            // Only show alert if we have no data at all
+            if (loadedContacts.length === 0 && loadedCampaigns.length === 0 && loadedTemplates.length === 0 && loadedCertificates.length === 0) {
+                const errorMsg = error.response?.data?.error || 
+                                error.response?.data?.message || 
+                                error.message || 
+                                'Failed to load data from backend';
+                
+                alert(`Failed to load data: ${errorMsg}\n\nPlease check:\n1. Is the backend server running?\n2. Is the API URL correct? (Check console for [API Config])\n3. Check browser console for more details.`);
+            }
         } finally {
             setLoading(false);
         }
@@ -1404,6 +1488,7 @@ function MarketingDashboard() {
         { id: 'templates', label: 'Templates', icon: BookOpen },
         { id: 'scheduled', label: 'Scheduled', icon: Calendar },
         { id: 'social-media', label: 'Social Media', icon: Share2 },
+        { id: 'settings', label: 'Settings', icon: Settings },
     ];
 
 
@@ -1426,8 +1511,99 @@ function MarketingDashboard() {
             case 'templates': return 'Message Templates';
             case 'scheduled': return 'Scheduled Campaigns';
             case 'social-media': return 'Social Media Automation';
+            case 'settings': return 'Settings';
             default: return 'Dashboard';
         }
+    };
+
+    const renderSettingsView = () => {
+        return (
+            <>
+                <div className="card">
+                    <div className="card-body" style={{ padding: 'var(--spacing-lg)' }}>
+                        <div className="settings-section" style={{ marginBottom: '2rem', paddingBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
+                            <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>API Configuration</h4>
+                            <div className="form-group">
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>API Base URL</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={API_BASE_URL}
+                                    readOnly
+                                    style={{ backgroundColor: 'var(--bg-secondary)', cursor: 'not-allowed', opacity: 0.8 }}
+                                />
+                                <small className="form-hint" style={{ display: 'block', marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>Current API endpoint configuration</small>
+                            </div>
+                        </div>
+
+                        <div className="settings-section" style={{ marginBottom: '2rem', paddingBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
+                            <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>User Information</h4>
+                            <div className="form-group" style={{ marginBottom: '1rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Email</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={user?.email || 'Not available'}
+                                    readOnly
+                                    style={{ backgroundColor: 'var(--bg-secondary)', cursor: 'not-allowed', opacity: 0.8 }}
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>User ID</label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    value={user?.uid || 'Not available'}
+                                    readOnly
+                                    style={{ backgroundColor: 'var(--bg-secondary)', cursor: 'not-allowed', opacity: 0.8 }}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="settings-section" style={{ marginBottom: '2rem', paddingBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
+                            <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>Data Statistics</h4>
+                            <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--spacing-lg)' }}>
+                                <div className="stat-card">
+                                    <div className="stat-value">{contacts.length}</div>
+                                    <div className="stat-label">Total Contacts</div>
+                                </div>
+                                <div className="stat-card">
+                                    <div className="stat-value">{campaigns.length}</div>
+                                    <div className="stat-label">Total Campaigns</div>
+                                </div>
+                                <div className="stat-card">
+                                    <div className="stat-value">{templates.length}</div>
+                                    <div className="stat-label">Templates</div>
+                                </div>
+                                <div className="stat-card">
+                                    <div className="stat-value">{certificates.length}</div>
+                                    <div className="stat-label">Certificates</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="settings-section">
+                            <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>Actions</h4>
+                            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                                <button className="btn btn-secondary" onClick={() => window.location.reload()}>
+                                    <RefreshCw size={18} />
+                                    Refresh Page
+                                </button>
+                                <button className="btn btn-secondary" onClick={() => {
+                                    if (confirm('Are you sure you want to clear the browser cache?')) {
+                                        localStorage.clear();
+                                        window.location.reload();
+                                    }
+                                }}>
+                                    <Trash2 size={18} />
+                                    Clear Cache
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </>
+        );
     };
 
     const renderContent = () => {
@@ -1450,6 +1626,8 @@ function MarketingDashboard() {
                     filterPlatform={socialMediaFilterPlatform}
                     filterStatus={socialMediaFilterStatus}
                 />;
+            case 'settings':
+                return renderSettingsView();
             default:
                 return renderDashboardView();
         }
@@ -1853,7 +2031,7 @@ function MarketingDashboard() {
                                                 </span>
                                             </td>
                                             <td className="message-preview">
-                                                {campaign.subject || campaign.message.substring(0, 50) + '...'}
+                                                {campaign.subject || (campaign.message ? campaign.message.substring(0, 50) + '...' : 'No message')}
                                             </td>
                                             <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
                                             <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
@@ -2780,7 +2958,7 @@ function MarketingDashboard() {
                                     
                                     return (
                                         <tr key={campaign.id}>
-                                            <td className="message-preview">{campaign.message.substring(0, 50)}...</td>
+                                            <td className="message-preview">{campaign.message ? campaign.message.substring(0, 50) + '...' : 'No message'}</td>
                                             <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
                                             <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
                                             <td>
@@ -2933,7 +3111,7 @@ function MarketingDashboard() {
                             </div>
                             <h3 className="template-name">{template.name}</h3>
                             {template.subject && <p className="template-subject">Subject: {template.subject}</p>}
-                            <p className="template-preview">{template.content.substring(0, 100)}...</p>
+                            <p className="template-preview">{template.content ? template.content.substring(0, 100) + '...' : 'No content'}</p>
                             <div className="template-footer">
                                 <span className="template-date">Created {formatDate(template.createdAt)}</span>
                             </div>
@@ -3132,8 +3310,7 @@ function MarketingDashboard() {
         );
     };
 
-
-
+    // Always render, even if loading or errors occur
     return (
         <div className="dashboard-layout">
             {/* Sidebar */}
@@ -3273,7 +3450,6 @@ function MarketingDashboard() {
                                         onChange={(e) => setSocialMediaFilterPlatform(e.target.value)}
                                         style={{
                                             padding: 'var(--spacing-sm) var(--spacing-md)',
-                                            paddingRight: '32px',
                                             background: 'var(--bg-secondary)',
                                             border: '1px solid var(--border-color)',
                                             borderRadius: 'var(--radius-lg)',
@@ -3303,7 +3479,6 @@ function MarketingDashboard() {
                                         onChange={(e) => setSocialMediaFilterStatus(e.target.value)}
                                         style={{
                                             padding: 'var(--spacing-sm) var(--spacing-md)',
-                                            paddingRight: '32px',
                                             background: 'var(--bg-secondary)',
                                             border: '1px solid var(--border-color)',
                                             borderRadius: 'var(--radius-lg)',

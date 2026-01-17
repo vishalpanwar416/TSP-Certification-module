@@ -1,18 +1,54 @@
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import MarketingDashboard from './pages/MarketingDashboard';
 import Login from './pages/Login';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function AppContent() {
-  const { user } = useAuth();
+  try {
+    const { user, loading } = useAuth();
 
-  return user ? <MarketingDashboard /> : <Login />;
+    if (loading) {
+      return (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+          fontFamily: 'system-ui, sans-serif'
+        }}>
+          <div>Loading...</div>
+        </div>
+      );
+    }
+
+    return user ? <MarketingDashboard /> : <Login />;
+  } catch (error) {
+    console.error('Error in AppContent:', error);
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        fontFamily: 'system-ui, sans-serif',
+        color: '#ef4444'
+      }}>
+        <div>
+          <h2>Authentication Error</h2>
+          <p>{error.message}</p>
+        </div>
+      </div>
+    );
+  }
 }
 
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 

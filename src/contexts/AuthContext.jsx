@@ -24,21 +24,27 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
 
-    // Verify auth is available
-    if (!auth) {
-        console.error('Firebase Auth is not initialized!');
-        setLoading(false);
-    }
-
     useEffect(() => {
         if (!auth) {
+            console.error('Firebase Auth is not initialized!');
             console.error('Cannot initialize auth state - auth object is missing');
             setLoading(false);
             return;
         }
 
+        // Set a timeout to ensure loading doesn't stay true forever
+        const loadingTimeout = setTimeout(() => {
+            console.warn('Auth state check taking too long, setting loading to false');
+            setLoading(false);
+        }, 5000);
+
         const unsubscribe = onAuthStateChanged(auth, (user) => {
+            clearTimeout(loadingTimeout);
             setUser(user);
+            setLoading(false);
+        }, (error) => {
+            clearTimeout(loadingTimeout);
+            console.error('Auth state change error:', error);
             setLoading(false);
         });
 
@@ -53,7 +59,10 @@ export const AuthProvider = ({ children }) => {
                 console.error('Redirect sign-in error:', error);
         });
 
-        return unsubscribe;
+        return () => {
+            clearTimeout(loadingTimeout);
+            unsubscribe();
+        };
     }, []);
 
     const login = (email, password) => {
@@ -112,7 +121,7 @@ export const AuthProvider = ({ children }) => {
 
     return (
         <AuthContext.Provider value={value}>
-            {!loading && children}
+            {children}
         </AuthContext.Provider>
     );
 };
