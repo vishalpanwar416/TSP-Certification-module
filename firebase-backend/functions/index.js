@@ -970,7 +970,7 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
         // Check if WhatsApp is configured
         if (!isWhatsAppConfigured()) {
             return res.status(503).json({
-                error: 'WhatsApp service is not configured. Please set up Twilio credentials.',
+                error: 'WhatsApp service is not configured. Please set up AiSensy credentials.',
                 configured: false
             });
         }
@@ -990,11 +990,23 @@ app.post('/certificates/:id/send-whatsapp', async (req, res) => {
             });
         }
 
-        // Send via WhatsApp
-        const result = await sendCertificateLinkViaWhatsApp(
+        // Send certificate PDF file via WhatsApp (not just a link)
+        // Use sendBulkWhatsApp to send the actual PDF file with a message
+        // Format message to work with AiSensy (will be split by newlines into multiple parameters)
+        const message = `🎉 Congratulations ${certificate.recipient_name}!` +
+            `\nYou have been awarded a Certificate of Appreciation from Top Selling Property.` +
+            `\n📜 Certificate Number: ${certificate.certificate_number}` +
+            (certificate.award_rera_number ? `\n🏆 Award RERA Number: ${certificate.award_rera_number}` : '') +
+            `\nThank you for your commitment and excellence!` +
+            `\nwww.topsellingproperty.com`;
+
+        // Force use of bulk_message campaign for media attachments
+        const result = await sendBulkWhatsApp(
             recipientNumber,
+            message,
             certificate.pdf_url,
-            certificate
+            `certificate_${certificate.certificate_number}.pdf`,
+            'bulk_message' // Explicitly use bulk_message campaign for media
         );
 
         // Verify the message was actually sent
@@ -3423,6 +3435,80 @@ app.get('/test/storage', async (req, res) => {
                 '4. Deploy storage rules: firebase deploy --only storage',
                 '5. Test again using: GET /test/storage'
             ]
+        });
+    }
+});
+
+/**
+ * Check phone number status in AiSensy
+ * POST /test/whatsapp/check-number
+ * Body: { phone_number: "7500988212" }
+ */
+app.post('/test/whatsapp/check-number', async (req, res) => {
+    try {
+        const { phone_number } = req.body;
+
+        if (!phone_number) {
+            return res.status(400).json({ error: 'phone_number is required' });
+        }
+
+        if (!isWhatsAppConfigured()) {
+            return res.status(503).json({
+                error: 'WhatsApp service is not configured',
+                configured: false
+            });
+        }
+
+        const { formatPhoneNumber } = require('./utils/whatsappService');
+        const formattedNumber = formatPhoneNumber(phone_number);
+
+        // Try to send a minimal test message to check number status
+        const { sendBulkWhatsApp } = require('./utils/whatsappService');
+        
+        try {
+            const result = await sendBulkWhatsApp(
+                phone_number,
+                'Test message to check number status',
+                null, // No media
+                null,
+                'bulk_message'
+            );
+
+            res.json({
+                success: true,
+                message: 'Number appears to be valid and opted-in',
+                data: {
+                    formatted_number: formattedNumber,
+                    test_result: result
+                }
+            });
+        } catch (error) {
+            // Capture detailed error information
+            const errorMessage = error.message || error.toString();
+            
+            res.status(400).json({
+                success: false,
+                message: 'Number check failed',
+                data: {
+                    formatted_number: formattedNumber,
+                    error: errorMessage,
+                    error_type: errorMessage.includes('rate limit') ? 'rate_limit' :
+                              errorMessage.includes('opted-in') ? 'opt_in_required' :
+                              errorMessage.includes('healthy ecosystem') ? 'ecosystem_restriction' :
+                              'unknown',
+                    recommendations: errorMessage.includes('rate limit') ? 
+                        ['Wait 15-30 minutes', 'Add number to AiSensy as test number'] :
+                        errorMessage.includes('opted-in') ?
+                        ['Add number to AiSensy Dashboard > Contacts', 'Mark as Opted-In', 'Verify number is whitelisted'] :
+                        ['Check AiSensy dashboard for number status', 'Verify number is not blocked', 'Contact AiSensy support']
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Error checking phone number:', error);
+        res.status(500).json({
+            error: 'Failed to check phone number',
+            details: error.message
         });
     }
 });

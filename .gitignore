@@ -38,3 +38,9 @@ firebase-backend/functions/.runtimeconfig.json
 
 # Test files
 test_contacts.csv
+sample_upload.csv
+*test*.js
+*test*.csv
+Certificate*.jpg
+Certificate*.xlsx
+Certificate*.pdf
