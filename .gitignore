@@ -6,6 +6,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+process_log.txt
+firebase-debug.log
 
 node_modules
 dist
@@ -25,5 +27,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Personal config files
+.zshrc-aliases
+npm
+firebase-backend/npm
+
+# Firebase
 firebase-backend/functions/.runtimeconfig.json
+
+# Test files
 test_contacts.csv
