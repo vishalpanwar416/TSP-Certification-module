@@ -47,7 +47,8 @@ import {
     Star,
     RefreshCw,
     Share2,
-    Settings
+    Settings,
+    Heart
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import SocialMediaAutomation from '../components/SocialMediaAutomation';
@@ -57,7 +58,22 @@ import firebaseService from '../services/firebaseDirectService';
 import messagingService from '../services/messagingService';
 import notificationsService from '../services/notificationsService';
 import { certificateAPI } from '../services/api';
+import { campaignsAPI } from '../services/marketingService';
 import PreviewCertificateModal from '../components/PreviewCertificateModal';
+import MessageSendingLoader from '../components/MessageSendingLoader';
+import BackgroundJobsNotification from '../components/BackgroundJobsNotification';
+import { requestNotificationPermission, isNotificationEnabled, getNotificationPermission, showNotificationAlert } from '../utils/browserNotifications';
+// Import view components
+import DashboardView from '../components/marketing-views/DashboardView';
+import EmailView from '../components/marketing-views/EmailView';
+import WhatsAppView from '../components/marketing-views/WhatsAppView';
+import ContactsView from '../components/marketing-views/ContactsView';
+import CertificatesView from '../components/marketing-views/CertificatesView';
+import TemplatesView from '../components/marketing-views/TemplatesView';
+import ScheduledView from '../components/marketing-views/ScheduledView';
+import CampaignDetailsModal from '../components/CampaignDetailsModal';
+import { formatDate, formatDateTime, renderStatusBadge } from '../components/marketing-views/utils';
+
 
 // Utility function to safely parse Firestore timestamps
 const parseFirestoreDate = (timestamp) => {
@@ -105,50 +121,184 @@ const parseFirestoreDate = (timestamp) => {
     return null;
 };
 
-// Format date safely
-const formatDate = (timestamp, options = {}) => {
-    const date = parseFirestoreDate(timestamp);
-    if (!date || isNaN(date.getTime())) {
-        // If timestamp is missing or invalid, try to show current date as fallback
-        // This handles cases where the timestamp hasn't been resolved yet
-        if (timestamp === null || timestamp === undefined) {
-            return 'N/A';
-        }
-        // Log for debugging
-        console.warn('Invalid date format:', timestamp);
-        return 'N/A';
-    }
+// formatDate and formatDateTime are now imported from '../components/marketing-views/utils'
 
-    const defaultOptions = {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
+// Create Contact Modal Component
+function CreateContactModal({ onClose, onCreate }) {
+    const [formData, setFormData] = useState({
+        name: '',
+        email: '',
+        phone: '',
+        certificate_number: '',
+        rera_awarde_no: '',
+        professional: ''
+    });
+    const [creating, setCreating] = useState(false);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({
+            ...prev,
+            [name]: value
+        }));
     };
 
-    return date.toLocaleDateString('en-US', { ...defaultOptions, ...options });
-};
-
-// Format date and time safely
-const formatDateTime = (timestamp) => {
-    const date = parseFirestoreDate(timestamp);
-    if (!date || isNaN(date.getTime())) {
-        // If timestamp is missing or invalid, try to show current date as fallback
-        if (timestamp === null || timestamp === undefined) {
-            return 'N/A';
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        
+        if (!formData.name && !formData.email && !formData.phone) {
+            alert('Please provide at least a name, email, or phone number');
+            return;
         }
-        // Log for debugging
-        console.warn('Invalid date format:', timestamp);
-        return 'N/A';
-    }
 
-    return date.toLocaleString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-    });
-};
+        setCreating(true);
+        try {
+            await onCreate(formData);
+            onClose();
+        } catch (error) {
+            console.error('Create contact component error:', error);
+        } finally {
+            setCreating(false);
+        }
+    };
+
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                    <div>
+                        <h2 className="modal-title">Create New Contact</h2>
+                        <p className="modal-subtitle">Add a new contact to your database</p>
+                    </div>
+                    <button className="modal-close" onClick={onClose}>
+                        <X size={24} />
+                    </button>
+                </div>
+                <form onSubmit={handleSubmit}>
+                    <div className="modal-body">
+                        <div className="form-group">
+                            <label htmlFor="name">
+                                <Users size={14} />
+                                Name <span className="text-muted">(optional)</span>
+                            </label>
+                            <input
+                                type="text"
+                                id="name"
+                                name="name"
+                                value={formData.name}
+                                onChange={handleChange}
+                                placeholder="Enter contact name"
+                                className="form-input"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="email">
+                                <AtSign size={14} />
+                                Email <span className="text-muted">(optional)</span>
+                            </label>
+                            <input
+                                type="email"
+                                id="email"
+                                name="email"
+                                value={formData.email}
+                                onChange={handleChange}
+                                placeholder="Enter email address"
+                                className="form-input"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="phone">
+                                <Phone size={14} />
+                                Phone <span className="text-muted">(optional)</span>
+                            </label>
+                            <input
+                                type="tel"
+                                id="phone"
+                                name="phone"
+                                value={formData.phone}
+                                onChange={handleChange}
+                                placeholder="Enter phone number"
+                                className="form-input"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="certificate_number">
+                                <FileText size={14} />
+                                Certificate Number <span className="text-muted">(optional)</span>
+                            </label>
+                            <input
+                                type="text"
+                                id="certificate_number"
+                                name="certificate_number"
+                                value={formData.certificate_number}
+                                onChange={handleChange}
+                                placeholder="Enter certificate number"
+                                className="form-input"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="rera_awarde_no">
+                                <FileText size={14} />
+                                RERA Awarde No. <span className="text-muted">(optional)</span>
+                            </label>
+                            <input
+                                type="text"
+                                id="rera_awarde_no"
+                                name="rera_awarde_no"
+                                value={formData.rera_awarde_no}
+                                onChange={handleChange}
+                                placeholder="Enter RERA awarde number"
+                                className="form-input"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="professional">
+                                <FileText size={14} />
+                                Professional <span className="text-muted">(optional)</span>
+                            </label>
+                            <input
+                                type="text"
+                                id="professional"
+                                name="professional"
+                                value={formData.professional}
+                                onChange={handleChange}
+                                placeholder="Enter professional designation"
+                                className="form-input"
+                            />
+                        </div>
+                    </div>
+                    <div className="modal-footer">
+                        <button type="button" className="btn btn-secondary" onClick={onClose}>
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            className="btn btn-primary"
+                            disabled={creating || (!formData.name && !formData.email && !formData.phone)}
+                        >
+                            {creating ? (
+                                <>
+                                    <span className="btn-spinner"></span>
+                                    Creating...
+                                </>
+                            ) : (
+                                <>
+                                    <UserPlus size={18} />
+                                    Create Contact
+                                </>
+                            )}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
 
 // Contact Upload Modal Component
 function ContactUploadModal({ onClose, onUpload }) {
@@ -354,6 +504,7 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
     const [scheduleEnabled, setScheduleEnabled] = useState(false);
     const [scheduleDate, setScheduleDate] = useState('');
     const [scheduleTime, setScheduleTime] = useState('');
+    const [whatsappCampaignName, setWhatsappCampaignName] = useState('');
 
     // Set default schedule to tomorrow at 10 AM
     useEffect(() => {
@@ -460,7 +611,7 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                         jpg: formatJPG
                     }
                 } : null,
-                whatsappCampaign: null,
+                whatsappCampaign: whatsappCampaignName.trim() || null,
                 scheduledAt
             });
             onClose();
@@ -733,6 +884,26 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
                             </div>
                         )}
 
+                        {/* WhatsApp Campaign Name (Optional) */}
+                        {(sendViaWhatsApp || isWhatsApp) && (
+                            <div className="form-group">
+                                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <MessageCircle size={16} />
+                                    WhatsApp Campaign Name (Optional)
+                                </label>
+                                <input
+                                    type="text"
+                                    className="form-input"
+                                    placeholder="e.g., text_notification, bulk_message, custom_campaign"
+                                    value={whatsappCampaignName}
+                                    onChange={(e) => setWhatsappCampaignName(e.target.value)}
+                                />
+                                <small style={{ display: 'block', marginTop: '0.5rem', fontSize: '0.75rem', color: '#6b7280' }}>
+                                    Leave empty to use default campaign name from settings. This allows you to use different AiSensy campaigns for different message types.
+                                </small>
+                            </div>
+                        )}
+
                         {/* Certificate Attachment Section */}
                         <div className="form-group" style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: '#f9fafb' }}>
                             <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontWeight: '500' }}>
@@ -900,6 +1071,7 @@ function ComposeModal({ type, contacts, certificates = [], templates = [], onClo
     );
 }
 
+
 function MarketingDashboard() {
     const { logout, user } = useAuth();
     const [contacts, setContacts] = useState([]);
@@ -923,23 +1095,46 @@ function MarketingDashboard() {
 
     // Modal states
     const [showUploadModal, setShowUploadModal] = useState(false);
+    const [showCreateContactModal, setShowCreateContactModal] = useState(false);
     const [showComposeModal, setShowComposeModal] = useState(false);
     const [composeType, setComposeType] = useState('email');
     const [templates, setTemplates] = useState([]);
     const [showTemplateModal, setShowTemplateModal] = useState(false);
     const [editingTemplate, setEditingTemplate] = useState(null);
     const [scheduledCampaigns, setScheduledCampaigns] = useState([]);
+    const [scheduledViewTab, setScheduledViewTab] = useState('active'); // 'active' or 'history'
     const [previewCertificate, setPreviewCertificate] = useState(null);
     const [showPreviewModal, setShowPreviewModal] = useState(false);
+    const [selectedCampaign, setSelectedCampaign] = useState(null);
+    const [showCampaignDetailsModal, setShowCampaignDetailsModal] = useState(false);
     const [showNotifications, setShowNotifications] = useState(false);
     const [notifications, setNotifications] = useState([]);
     const [unreadCount, setUnreadCount] = useState(0);
+    const [previousNotificationIds, setPreviousNotificationIds] = useState(new Set());
+    const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+        // Initialize state based on current permission
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+            return Notification.permission === 'granted';
+        }
+        return false;
+    });
     const [certificateTemplate, setCertificateTemplate] = useState(null);
     const [certificateTemplates, setCertificateTemplates] = useState([]); // All templates
     const [templateUploading, setTemplateUploading] = useState(false);
     const [showTemplateUpload, setShowTemplateUpload] = useState(false);
     const [newTemplateName, setNewTemplateName] = useState('');
     const [certificateViewMode, setCertificateViewMode] = useState('certificates'); // 'certificates' or 'templates'
+    
+    // Message sending progress and background jobs
+    const [showSendingLoader, setShowSendingLoader] = useState(false);
+    const [sendingProgress, setSendingProgress] = useState({
+        totalMessages: 0,
+        sentMessages: 0,
+        failedMessages: 0
+    });
+    const [backgroundJobs, setBackgroundJobs] = useState([]);
+    const [currentJobId, setCurrentJobId] = useState(null);
+    const [isBackgroundMode, setIsBackgroundMode] = useState(false);
 
     // Load data from Firebase on mount
     useEffect(() => {
@@ -947,6 +1142,13 @@ function MarketingDashboard() {
         console.log('[MarketingDashboard] Firebase service available:', !!firebaseService);
         console.log('[MarketingDashboard] Contacts service available:', !!firebaseService?.contacts);
         console.log('[API DEBUG] Using Base URL:', API_BASE_URL);
+        
+        // Check notification permission immediately
+        if (typeof window !== 'undefined' && 'Notification' in window) {
+            const initialPermission = Notification.permission;
+            console.log('[Notifications] Initial permission check:', initialPermission);
+            setNotificationsEnabled(initialPermission === 'granted');
+        }
         
         let isMounted = true;
         
@@ -961,6 +1163,26 @@ function MarketingDashboard() {
         // Wrap in try-catch to prevent crashes
         const loadData = async () => {
             try {
+                // Check current notification permission status immediately
+                const currentPermission = getNotificationPermission();
+                console.log('[Notifications] Current permission status:', currentPermission);
+                
+                if (isMounted) {
+                    const isEnabled = currentPermission === 'granted';
+                    setNotificationsEnabled(isEnabled);
+                    
+                    if (isEnabled) {
+                        console.log('✅ Browser notifications already enabled');
+                    } else if (currentPermission === 'denied') {
+                        console.warn('⚠️ Browser notifications denied - user must enable in browser settings');
+                    } else if (currentPermission === 'default') {
+                        console.log('ℹ️ Notification permission not yet requested');
+                        // Don't auto-request on page load - let user click the button
+                    } else if (currentPermission === 'unsupported') {
+                        console.warn('⚠️ Browser does not support notifications');
+                    }
+                }
+                
                 await loadDataFromFirebase();
                 await loadNotifications();
             } catch (error) {
@@ -983,7 +1205,23 @@ function MarketingDashboard() {
     const loadNotifications = async () => {
         try {
             const response = await notificationsService.getAll({ limit: 20 });
-            setNotifications(response.data || response || []);
+            const newNotifications = response.data || response || [];
+            
+            // Detect new notifications and show browser notifications
+            if (previousNotificationIds.size > 0 && notificationsEnabled) {
+                newNotifications.forEach((notification) => {
+                    if (!previousNotificationIds.has(notification.id) && !notification.read) {
+                        // This is a new unread notification
+                        showNotificationAlert(notification);
+                    }
+                });
+            }
+            
+            // Update previous notification IDs
+            const newIds = new Set(newNotifications.map(n => n.id));
+            setPreviousNotificationIds(newIds);
+            
+            setNotifications(newNotifications);
             setUnreadCount(response.unreadCount || 0);
         } catch (error) {
             console.error('Error loading notifications:', error);
@@ -1000,6 +1238,27 @@ function MarketingDashboard() {
 
         return () => clearInterval(interval);
     }, []);
+
+    // Check notification permission status periodically (in case user enables in browser settings)
+    useEffect(() => {
+        const checkPermission = () => {
+            const currentPermission = getNotificationPermission();
+            const isEnabled = currentPermission === 'granted';
+            setNotificationsEnabled(isEnabled);
+            
+            if (isEnabled && !notificationsEnabled) {
+                console.log('✅ Notifications were enabled (detected via periodic check)');
+            }
+        };
+
+        // Check immediately
+        checkPermission();
+
+        // Check every 3 seconds (more frequent for better UX)
+        const interval = setInterval(checkPermission, 3000);
+
+        return () => clearInterval(interval);
+    }, [notificationsEnabled]);
 
     // Load certificate templates when certificates tab is active
     useEffect(() => {
@@ -1237,17 +1496,153 @@ function MarketingDashboard() {
         }
     };
 
+    // Handle create contact - Save to Firebase
+    const handleCreateContact = async (contactData) => {
+        try {
+            setLoading(true);
+            await firebaseService.contacts.create(contactData);
+
+            // Reload contacts from Firebase
+            const updatedContacts = await firebaseService.contacts.getAll();
+            setContacts(updatedContacts);
+            updateStats(updatedContacts, campaigns);
+
+            alert('Contact created successfully!');
+        } catch (error) {
+            console.error('Error creating contact:', error);
+            alert(`Failed to create contact: ${error.message}`);
+            throw error; // Re-throw so modal can handle it
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // Poll campaign progress
+    const pollCampaignProgress = async (campaignId, jobId, totalContacts) => {
+        try {
+            const campaign = await firebaseService.campaigns.getById(campaignId);
+            if (campaign) {
+                const sent = campaign.sent_count || campaign.sentCount || 0;
+                const failed = campaign.failed_count || campaign.failedCount || 0;
+                const total = campaign.recipient_count || campaign.recipientCount || totalContacts || 0;
+                const status = campaign.status;
+
+                // Update background job if exists
+                if (jobId) {
+                    setBackgroundJobs(prev => {
+                        const updated = prev.map(job => {
+                            if (job.id === jobId) {
+                                // If this job has multiple campaigns, aggregate them
+                                const jobCampaigns = job.campaignIds || [];
+                                if (jobCampaigns.length > 1) {
+                                    // For multi-campaign jobs, we need to get all campaigns
+                                    return { ...job, status };
+                                } else {
+                                    // Single campaign job
+                                    return { ...job, sentMessages: sent, failedMessages: failed, status };
+                                }
+                            }
+                            return job;
+                        });
+                        
+                        // Update progress if loader is visible
+                        if (showSendingLoader && updated.find(j => j.id === jobId)) {
+                            const activeJobs = updated.filter(j => {
+                                const remaining = j.totalMessages - j.sentMessages - j.failedMessages;
+                                return remaining > 0;
+                            });
+                            
+                            if (activeJobs.length > 0) {
+                                const totalMessages = activeJobs.reduce((sum, j) => sum + j.totalMessages, 0);
+                                const sentMessages = activeJobs.reduce((sum, j) => sum + j.sentMessages, 0);
+                                const failedMessages = activeJobs.reduce((sum, j) => sum + j.failedMessages, 0);
+                                
+                                setSendingProgress({
+                                    totalMessages,
+                                    sentMessages,
+                                    failedMessages
+                                });
+                            }
+                        }
+                        
+                        return updated;
+                    });
+                }
+
+                // Continue polling if not completed
+                if (status === 'pending' || status === 'sending') {
+                    setTimeout(() => pollCampaignProgress(campaignId, jobId, totalContacts), 2000);
+                } else {
+                    // Campaign completed
+                    if (jobId) {
+                        // For jobs with multiple campaigns, we need to check all campaigns
+                        setBackgroundJobs(prev => {
+                            const job = prev.find(j => j.id === jobId);
+                            if (job && job.campaignIds && job.campaignIds.length > 1) {
+                                // Multi-campaign job - update this campaign's progress
+                                // The job will be removed when all campaigns complete
+                                return prev;
+                            } else {
+                                // Single campaign job - remove after delay
+                                setTimeout(() => {
+                                    setBackgroundJobs(prevJobs => prevJobs.filter(j => j.id !== jobId));
+                                }, 5000);
+                            }
+                            return prev;
+                        });
+                    }
+                    
+                    // Check if all active jobs are complete
+                    setTimeout(() => {
+                        setBackgroundJobs(prev => {
+                            const activeJobs = prev.filter(j => {
+                                const remaining = j.totalMessages - j.sentMessages - j.failedMessages;
+                                return remaining > 0;
+                            });
+                            if (activeJobs.length === 0 && showSendingLoader && !isBackgroundMode) {
+                                setShowSendingLoader(false);
+                            }
+                            return prev;
+                        });
+                    }, 2000);
+                }
+            }
+        } catch (error) {
+            console.error('Error polling campaign progress:', error);
+            // Continue polling even on error (might be temporary)
+            setTimeout(() => pollCampaignProgress(campaignId, jobId, totalContacts), 5000);
+        }
+    };
+
+    // Handle send in background
+    const handleSendInBackground = () => {
+        setIsBackgroundMode(true);
+        setShowSendingLoader(false);
+    };
+
     // Handle send messages - Uses messaging service
     const handleSendMessages = async (data) => {
         const selectedContactsList = contacts.filter(c => data.contactIds.includes(c.id));
 
         try {
             setLoading(true);
+            
+            // Initialize progress tracking
+            const totalContacts = data.contactIds.length;
+            const sendBoth = data.sendViaEmail && data.sendViaWhatsApp;
+            const totalMessages = sendBoth ? totalContacts * 2 : totalContacts;
+            
+            setSendingProgress({
+                totalMessages,
+                sentMessages: 0,
+                failedMessages: 0
+            });
+            setShowSendingLoader(true);
+            setIsBackgroundMode(false);
 
             // Check if both channels are selected
-            const sendBoth = data.sendViaEmail && data.sendViaWhatsApp;
-            
             let results = [];
+            let campaignIds = [];
             
             if (sendBoth) {
                 // Create campaigns for both email and WhatsApp
@@ -1279,6 +1674,13 @@ function MarketingDashboard() {
                 
                 // Execute both campaigns in parallel
                 results = await Promise.allSettled([emailCampaign, whatsappCampaign]);
+                
+                if (results[0].status === 'fulfilled' && results[0].value?.id) {
+                    campaignIds.push(results[0].value.id);
+                }
+                if (results[1].status === 'fulfilled' && results[1].value?.id) {
+                    campaignIds.push(results[1].value.id);
+                }
             } else {
                 // Single channel campaign
                 const result = await messagingService.createAndSendCampaign(
@@ -1294,17 +1696,113 @@ function MarketingDashboard() {
                     contacts
                 );
                 results = [{ status: 'fulfilled', value: result }];
+                if (result?.id) {
+                    campaignIds.push(result.id);
+                }
             }
 
-            // Reload data from Firebase
-            const [updatedContacts, updatedCampaigns] = await Promise.all([
-                firebaseService.contacts.getAll(),
-                firebaseService.campaigns.getAll()
-            ]);
+            // Create background job
+            const jobId = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            setCurrentJobId(jobId);
+            
+            const newJob = {
+                id: jobId,
+                campaignIds,
+                totalMessages,
+                sentMessages: 0,
+                failedMessages: 0,
+                status: 'sending',
+                createdAt: new Date()
+            };
+            
+            setBackgroundJobs(prev => [...prev, newJob]);
 
-            setContacts(updatedContacts);
-            setCampaigns(updatedCampaigns);
-            updateStats(updatedContacts, updatedCampaigns);
+            // Start polling for progress - aggregate all campaigns for this job
+            const pollAllCampaigns = async () => {
+                try {
+                    const allCampaigns = await firebaseService.campaigns.getAll();
+                    const relevantCampaigns = allCampaigns.filter(c => campaignIds.includes(c.id));
+                    
+                    if (relevantCampaigns.length > 0) {
+                        const totalSent = relevantCampaigns.reduce((sum, c) => sum + (c.sent_count || c.sentCount || 0), 0);
+                        const totalFailed = relevantCampaigns.reduce((sum, c) => sum + (c.failed_count || c.failedCount || 0), 0);
+                        const allComplete = relevantCampaigns.every(c => 
+                            c.status === 'completed' || c.status === 'failed' || c.status === 'partial'
+                        );
+                        
+                        // Update background job
+                        setBackgroundJobs(prev => prev.map(job => 
+                            job.id === jobId 
+                                ? { ...job, sentMessages: totalSent, failedMessages: totalFailed, status: allComplete ? 'completed' : 'sending' }
+                                : job
+                        ));
+                        
+                        // Update progress if loader is visible
+                        if (showSendingLoader) {
+                            setSendingProgress({
+                                totalMessages,
+                                sentMessages: totalSent,
+                                failedMessages: totalFailed
+                            });
+                        }
+                        
+                        // Continue polling if not all complete
+                        if (!allComplete) {
+                            setTimeout(pollAllCampaigns, 2000);
+                        } else {
+                            // All campaigns complete - remove job after delay
+                            setTimeout(() => {
+                                setBackgroundJobs(prev => prev.filter(job => job.id !== jobId));
+                            }, 5000);
+                            
+                            if (showSendingLoader && !isBackgroundMode) {
+                                setTimeout(() => setShowSendingLoader(false), 2000);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error polling campaigns:', error);
+                    setTimeout(pollAllCampaigns, 5000);
+                }
+            };
+            
+            // Start polling
+            pollAllCampaigns();
+
+            // Reload data from Firebase (non-blocking)
+            firebaseService.contacts.getAll().then(updatedContacts => {
+                setContacts(updatedContacts);
+            }).catch(console.error);
+            
+            firebaseService.campaigns.getAll().then(updatedCampaigns => {
+                setCampaigns(updatedCampaigns);
+                updateStats(contacts, updatedCampaigns);
+            }).catch(console.error);
+
+            // If background mode, don't wait for completion
+            if (isBackgroundMode) {
+                setLoading(false);
+                return;
+            }
+
+            // Wait for campaigns to complete (with timeout)
+            const maxWaitTime = 300000; // 5 minutes
+            const startTime = Date.now();
+            
+            while (Date.now() - startTime < maxWaitTime) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                // Check if all campaigns are complete
+                const allCampaigns = await firebaseService.campaigns.getAll();
+                const relevantCampaigns = allCampaigns.filter(c => campaignIds.includes(c.id));
+                const allComplete = relevantCampaigns.every(c => 
+                    c.status === 'completed' || c.status === 'failed' || c.status === 'partial'
+                );
+                
+                if (allComplete) {
+                    break;
+                }
+            }
 
             // Process results and show appropriate message
             if (sendBoth) {
@@ -1318,30 +1816,49 @@ function MarketingDashboard() {
                 
                 const totalSent = emailSent + whatsappSent;
                 const totalFailed = emailFailed + whatsappFailed;
-                const total = data.contactIds.length * 2; // Both channels
+                
+                setSendingProgress({
+                    totalMessages,
+                    sentMessages: totalSent,
+                    failedMessages: totalFailed
+                });
                 
                 if (results[0].status === 'rejected' || results[1].status === 'rejected') {
                     const emailError = results[0].status === 'rejected' ? results[0].reason?.message : '';
                     const whatsappError = results[1].status === 'rejected' ? results[1].reason?.message : '';
-                    alert(`⚠️ Campaign status: Partial. Email: ${emailSent}/${data.contactIds.length} sent, ${emailFailed} failed. WhatsApp: ${whatsappSent}/${data.contactIds.length} sent, ${whatsappFailed} failed.${emailError ? ' Email error: ' + emailError : ''}${whatsappError ? ' WhatsApp error: ' + whatsappError : ''}`);
+                    if (!isBackgroundMode) {
+                        alert(`⚠️ Campaign status: Partial. Email: ${emailSent}/${totalContacts} sent, ${emailFailed} failed. WhatsApp: ${whatsappSent}/${totalContacts} sent, ${whatsappFailed} failed.${emailError ? ' Email error: ' + emailError : ''}${whatsappError ? ' WhatsApp error: ' + whatsappError : ''}`);
+                    }
                 } else if (totalFailed > 0) {
-                    alert(`⚠️ Campaign status: Partial. Email: ${emailSent}/${data.contactIds.length} sent, ${emailFailed} failed. WhatsApp: ${whatsappSent}/${data.contactIds.length} sent, ${whatsappFailed} failed.`);
+                    if (!isBackgroundMode) {
+                        alert(`⚠️ Campaign status: Partial. Email: ${emailSent}/${totalContacts} sent, ${emailFailed} failed. WhatsApp: ${whatsappSent}/${totalContacts} sent, ${whatsappFailed} failed.`);
+                    }
                 } else {
-                    alert(`✅ Campaign completed. Email: ${emailSent}/${data.contactIds.length} sent. WhatsApp: ${whatsappSent}/${data.contactIds.length} sent.`);
+                    if (!isBackgroundMode) {
+                        alert(`✅ Campaign completed. Email: ${emailSent}/${totalContacts} sent. WhatsApp: ${whatsappSent}/${totalContacts} sent.`);
+                    }
                 }
             } else {
                 const result = results[0].value;
                 const sent = result.sent_count ?? result.sentCount ?? result.sent ?? 0;
                 const failed = result.failed_count ?? result.failedCount ?? result.failed ?? 0;
-                const total = result.recipient_count ?? result.recipientCount ?? result.total ?? data.contactIds.length;
+                const total = result.recipient_count ?? result.recipientCount ?? result.total ?? totalContacts;
                 const status = result.status || (failed > 0 ? (sent > 0 ? 'partial' : 'failed') : 'completed');
 
-                if (failed > 0) {
-                    const errors = result.errors && Array.isArray(result.errors) ? result.errors : [];
-                    const firstError = errors.length ? ` First error: ${errors[0].error || ''}` : '';
-                    alert(`⚠️ Campaign status: ${status}. Sent ${sent}/${total}. Failed ${failed}.${firstError}`);
-                } else {
-                    alert(`✅ Campaign ${status}. Sent ${sent}/${total} messages.`);
+                setSendingProgress({
+                    totalMessages: total,
+                    sentMessages: sent,
+                    failedMessages: failed
+                });
+
+                if (!isBackgroundMode) {
+                    if (failed > 0) {
+                        const errors = result.errors && Array.isArray(result.errors) ? result.errors : [];
+                        const firstError = errors.length ? ` First error: ${errors[0].error || ''}` : '';
+                        alert(`⚠️ Campaign status: ${status}. Sent ${sent}/${total}. Failed ${failed}.${firstError}`);
+                    } else {
+                        alert(`✅ Campaign ${status}. Sent ${sent}/${total} messages.`);
+                    }
                 }
             }
         } catch (error) {
@@ -1358,13 +1875,51 @@ function MarketingDashboard() {
                                 error.message || 
                                 'Failed to send messages. Please try again.';
             
-            alert(`Failed to send messages: ${errorMessage}`);
+            if (!isBackgroundMode) {
+                alert(`Failed to send messages: ${errorMessage}`);
+                setShowSendingLoader(false);
+            }
+        } finally {
+            setLoading(false);
+            if (!isBackgroundMode) {
+                // Keep loader open if there are still messages being sent
+                setTimeout(() => {
+                    const remaining = sendingProgress.totalMessages - sendingProgress.sentMessages - sendingProgress.failedMessages;
+                    if (remaining <= 0) {
+                        setShowSendingLoader(false);
+                    }
+                }, 2000);
+            }
+        }
+    };
+
+    // Handle retry failed messages
+    const handleProcessOverdue = async () => {
+        if (!confirm('Process all overdue scheduled campaigns? This will send campaigns that are past their scheduled time.')) {
+            return;
+        }
+
+        try {
+            setLoading(true);
+            const result = await campaignsAPI.processOverdue();
+            
+            if (result.success) {
+                alert(`Successfully processed ${result.processed} overdue campaign(s)!`);
+                // Reload campaigns to refresh the view
+                const updatedCampaigns = await firebaseService.campaigns.getAll();
+                setCampaigns(updatedCampaigns);
+                updateStats(contacts, updatedCampaigns);
+            } else {
+                alert('Failed to process overdue campaigns. Please try again.');
+            }
+        } catch (error) {
+            console.error('Error processing overdue campaigns:', error);
+            alert(`Failed to process overdue campaigns: ${error.message || 'Unknown error'}`);
         } finally {
             setLoading(false);
         }
     };
 
-    // Handle retry failed messages
     const handleRetryFailed = async (campaignId) => {
         if (!window.confirm('Retry sending failed messages for this campaign?')) {
             return;
@@ -1372,7 +1927,8 @@ function MarketingDashboard() {
 
         try {
             setLoading(true);
-            const result = await firebaseService.campaigns.retry(campaignId);
+            // Use campaignsAPI.retry from marketingService instead of firebaseService
+            const result = await campaignsAPI.retry(campaignId);
 
             // Reload data from Firebase
             const [updatedContacts, updatedCampaigns] = await Promise.all([
@@ -1499,10 +2055,13 @@ function MarketingDashboard() {
         }
     };
 
+
     const renderSettingsView = () => {
         return (
-            <>
-                <div className="card">
+            <div style={{ width: '100%', minHeight: '500px' }}>
+
+                {/* Other Settings Sections */}
+                <div className="card" style={{ marginTop: '24px' }}>
                     <div className="card-body" style={{ padding: 'var(--spacing-lg)' }}>
                         <div className="settings-section" style={{ marginBottom: '2rem', paddingBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
                             <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>API Configuration</h4>
@@ -1520,48 +2079,159 @@ function MarketingDashboard() {
                         </div>
 
                         <div className="settings-section" style={{ marginBottom: '2rem', paddingBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
-                            <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>User Information</h4>
-                            <div className="form-group" style={{ marginBottom: '1rem' }}>
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Email</label>
-                                <input
-                                    type="text"
-                                    className="form-input"
-                                    value={user?.email || 'Not available'}
-                                    readOnly
-                                    style={{ backgroundColor: 'var(--bg-secondary)', cursor: 'not-allowed', opacity: 0.8 }}
-                                />
+                            <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <Bell size={20} />
+                                Notification Settings
+                            </h4>
+                            
+                            <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Browser Notifications</label>
+                                <div style={{ 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    gap: '1rem',
+                                    padding: '1rem',
+                                    backgroundColor: notificationsEnabled ? '#d1fae5' : (getNotificationPermission() === 'denied' ? '#fee2e2' : '#fef3c7'),
+                                    borderRadius: '8px',
+                                    border: `1px solid ${notificationsEnabled ? '#10b981' : (getNotificationPermission() === 'denied' ? '#ef4444' : '#fbbf24')}`
+                                }}>
+                                    <div style={{ flex: 1 }}>
+                                        <div style={{ fontWeight: 600, color: notificationsEnabled ? '#065f46' : (getNotificationPermission() === 'denied' ? '#991b1b' : '#92400e'), marginBottom: '0.25rem' }}>
+                                            {notificationsEnabled ? '✅ Notifications Enabled' : (getNotificationPermission() === 'denied' ? '❌ Notifications Blocked' : '⚠️ Notifications Disabled')}
+                                        </div>
+                                        <div style={{ fontSize: '0.875rem', color: notificationsEnabled ? '#047857' : (getNotificationPermission() === 'denied' ? '#dc2626' : '#b45309') }}>
+                                            {notificationsEnabled 
+                                                ? 'You will receive browser notifications for new alerts and updates.'
+                                                : (getNotificationPermission() === 'denied' 
+                                                    ? 'Notifications are blocked. Enable them in your browser settings.'
+                                                    : 'Enable browser notifications to receive alerts for new notifications, campaign updates, and system events.')}
+                                        </div>
+                                    </div>
+                                    {!notificationsEnabled && (
+                                        <button
+                                            className="btn"
+                                            style={{
+                                                backgroundColor: getNotificationPermission() === 'denied' ? '#ef4444' : '#f59e0b',
+                                                color: 'white',
+                                                border: 'none',
+                                                padding: '0.5rem 1rem',
+                                                borderRadius: '6px',
+                                                cursor: 'pointer',
+                                                fontWeight: 600,
+                                                fontSize: '0.875rem'
+                                            }}
+                                            onClick={async () => {
+                                                try {
+                                                    const currentPermission = getNotificationPermission();
+                                                    
+                                                    if (currentPermission === 'denied') {
+                                                        const userAgent = navigator.userAgent.toLowerCase();
+                                                        let instructions = 'Notifications are blocked. Please enable them in your browser settings:\n\n';
+                                                        
+                                                        if (userAgent.includes('chrome') || userAgent.includes('chromium')) {
+                                                            instructions += 'Chrome: Click the lock icon in the address bar → Site settings → Notifications → Allow';
+                                                        } else if (userAgent.includes('firefox')) {
+                                                            instructions += 'Firefox: Click the lock icon → More Information → Permissions → Notifications → Allow';
+                                                        } else if (userAgent.includes('safari')) {
+                                                            instructions += 'Safari: Safari → Preferences → Websites → Notifications → Allow for this site';
+                                                        } else if (userAgent.includes('edge')) {
+                                                            instructions += 'Edge: Click the lock icon → Site permissions → Notifications → Allow';
+                                                        } else {
+                                                            instructions += 'Go to your browser settings and allow notifications for this site';
+                                                        }
+                                                        
+                                                        alert(instructions);
+                                                        setTimeout(() => {
+                                                            const newPermission = getNotificationPermission();
+                                                            setNotificationsEnabled(newPermission === 'granted');
+                                                        }, 1000);
+                                                        return;
+                                                    }
+                                                    
+                                                    if (currentPermission === 'unsupported') {
+                                                        alert('Your browser does not support notifications.');
+                                                        return;
+                                                    }
+                                                    
+                                                    const permission = await requestNotificationPermission();
+                                                    setNotificationsEnabled(permission === 'granted');
+                                                    
+                                                    if (permission === 'granted') {
+                                                        try {
+                                                            const testNotification = new Notification('Notifications Enabled!', {
+                                                                body: 'You will now receive browser notifications for new alerts.',
+                                                                icon: '/favicon.ico',
+                                                                tag: 'notification-enabled'
+                                                            });
+                                                            
+                                                            testNotification.onclick = () => {
+                                                                window.focus();
+                                                                testNotification.close();
+                                                            };
+                                                            
+                                                            setTimeout(() => {
+                                                                testNotification.close();
+                                                            }, 3000);
+                                                        } catch (notifError) {
+                                                            console.error('Error showing test notification:', notifError);
+                                                        }
+                                                    } else if (permission === 'denied') {
+                                                        alert('Notifications were denied. Please enable them in your browser settings.');
+                                                    }
+                                                } catch (error) {
+                                                    console.error('Error enabling notifications:', error);
+                                                    alert('Error enabling notifications. Please check your browser settings.');
+                                                }
+                                            }}
+                                        >
+                                            {getNotificationPermission() === 'denied' ? 'Enable in Browser' : 'Enable Notifications'}
+                                        </button>
+                                    )}
+                                </div>
                             </div>
-                            <div className="form-group">
-                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>User ID</label>
-                                <input
-                                    type="text"
-                                    className="form-input"
-                                    value={user?.uid || 'Not available'}
-                                    readOnly
-                                    style={{ backgroundColor: 'var(--bg-secondary)', cursor: 'not-allowed', opacity: 0.8 }}
-                                />
-                            </div>
-                        </div>
 
-                        <div className="settings-section" style={{ marginBottom: '2rem', paddingBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
-                            <h4 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '1rem' }}>Data Statistics</h4>
-                            <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--spacing-lg)' }}>
-                                <div className="stat-card">
-                                    <div className="stat-value">{contacts.length}</div>
-                                    <div className="stat-label">Total Contacts</div>
+                            <div className="form-group" style={{ marginBottom: '1rem' }}>
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Notification Status</label>
+                                <div style={{ 
+                                    display: 'flex', 
+                                    flexDirection: 'column',
+                                    gap: '0.5rem',
+                                    padding: '1rem',
+                                    backgroundColor: 'var(--bg-secondary)',
+                                    borderRadius: '8px',
+                                    fontSize: '0.875rem'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span style={{ color: 'var(--text-muted)' }}>Permission Status:</span>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                                            {getNotificationPermission() === 'granted' ? '✅ Granted' : 
+                                             getNotificationPermission() === 'denied' ? '❌ Denied' : 
+                                             getNotificationPermission() === 'default' ? '⏳ Not Requested' : 
+                                             '❓ Unsupported'}
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span style={{ color: 'var(--text-muted)' }}>Unread Notifications:</span>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{unreadCount}</span>
+                                    </div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                        <span style={{ color: 'var(--text-muted)' }}>Total Notifications:</span>
+                                        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{notifications.length}</span>
+                                    </div>
                                 </div>
-                                <div className="stat-card">
-                                    <div className="stat-value">{campaigns.length}</div>
-                                    <div className="stat-label">Total Campaigns</div>
-                                </div>
-                                <div className="stat-card">
-                                    <div className="stat-value">{templates.length}</div>
-                                    <div className="stat-label">Templates</div>
-                                </div>
-                                <div className="stat-card">
-                                    <div className="stat-value">{certificates.length}</div>
-                                    <div className="stat-label">Certificates</div>
-                                </div>
+                            </div>
+
+                            <div className="form-group">
+                                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600, color: 'var(--text-primary)' }}>Notification Preferences</label>
+                                <small className="form-hint" style={{ display: 'block', marginTop: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                                    Browser notifications will alert you about:
+                                    <ul style={{ marginTop: '0.5rem', paddingLeft: '1.5rem' }}>
+                                        <li>New notifications from the system</li>
+                                        <li>Campaign completion status</li>
+                                        <li>Certificate generation updates</li>
+                                        <li>Important system events</li>
+                                    </ul>
+                                </small>
                             </div>
                         </div>
 
@@ -1585,24 +2255,95 @@ function MarketingDashboard() {
                         </div>
                     </div>
                 </div>
-            </>
+            </div>
         );
     };
 
     const renderContent = () => {
-        switch (activeTab) {
+        try {
+            switch (activeTab) {
             case 'contacts':
-                return renderContactsView();
+                return (
+                    <ContactsView
+                        contacts={contacts}
+                        filteredContacts={filteredContacts}
+                        onShowUploadModal={() => setShowUploadModal(true)}
+                        onShowCreateContactModal={() => setShowCreateContactModal(true)}
+                        onDeleteContact={handleDeleteContact}
+                        onPreviewCertificate={setPreviewCertificate}
+                        onShowPreviewModal={setShowPreviewModal}
+                    />
+                );
             case 'certificates':
-                return renderCertificatesView();
+                return (
+                    <CertificatesView
+                        certificates={certificates}
+                        certificateTemplates={certificateTemplates}
+                        certificateViewMode={certificateViewMode}
+                        onSetCertificateViewMode={setCertificateViewMode}
+                        searchQuery={searchQuery}
+                        loading={loading}
+                        newTemplateName={newTemplateName}
+                        onSetNewTemplateName={setNewTemplateName}
+                        templateUploading={templateUploading}
+                        onSetTemplateUploading={setTemplateUploading}
+                        onSetCertificates={setCertificates}
+                        onSetCertificateTemplates={setCertificateTemplates}
+                        onPreviewCertificate={setPreviewCertificate}
+                        onShowPreviewModal={setShowPreviewModal}
+                    />
+                );
             case 'email':
-                return renderEmailView();
+                return (
+                    <EmailView
+                        campaigns={campaigns}
+                        loading={loading}
+                        onOpenComposeModal={openComposeModal}
+                        onRetryFailed={handleRetryFailed}
+                    />
+                );
             case 'whatsapp':
-                return renderWhatsAppView();
+                return (
+                    <WhatsAppView
+                        campaigns={campaigns}
+                        loading={loading}
+                        onOpenComposeModal={openComposeModal}
+                        onRetryFailed={handleRetryFailed}
+                        onSetSelectedCampaign={setSelectedCampaign}
+                        onShowCampaignDetailsModal={() => setShowCampaignDetailsModal(true)}
+                    />
+                );
             case 'templates':
-                return renderTemplatesView();
+                return (
+                    <TemplatesView
+                        templates={templates}
+                        editingTemplate={editingTemplate}
+                        showTemplateModal={showTemplateModal}
+                        onShowTemplateModal={() => setShowTemplateModal(true)}
+                        onCloseTemplateModal={() => {
+                            setShowTemplateModal(false);
+                            setEditingTemplate(null);
+                        }}
+                        onSetEditingTemplate={setEditingTemplate}
+                        onSaveTemplate={handleSaveTemplate}
+                        onDeleteTemplate={handleDeleteTemplate}
+                        onSetComposeType={setComposeType}
+                        onShowComposeModal={() => setShowComposeModal(true)}
+                    />
+                );
             case 'scheduled':
-                return renderScheduledView();
+                return (
+                    <ScheduledView
+                        campaigns={campaigns}
+                        scheduledViewTab={scheduledViewTab}
+                        onSetScheduledViewTab={setScheduledViewTab}
+                        loading={loading}
+                        onOpenComposeModal={openComposeModal}
+                        onProcessOverdue={handleProcessOverdue}
+                        onSetSelectedCampaign={setSelectedCampaign}
+                        onShowCampaignDetailsModal={() => setShowCampaignDetailsModal(true)}
+                    />
+                );
             case 'social-media':
                 return <SocialMediaAutomation 
                     searchQuery={searchQuery}
@@ -1612,1372 +2353,34 @@ function MarketingDashboard() {
             case 'settings':
                 return renderSettingsView();
             default:
-                return renderDashboardView();
+                return (
+                    <DashboardView
+                        stats={stats}
+                        campaigns={campaigns}
+                        loading={loading}
+                        onOpenComposeModal={openComposeModal}
+                        onShowUploadModal={() => setShowUploadModal(true)}
+                        onRetryFailed={handleRetryFailed}
+                    />
+                );
+        }
+        } catch (error) {
+            console.error('Error in renderContent:', error);
+            return (
+                <div style={{ padding: '2rem', textAlign: 'center' }}>
+                    <h2>Error loading content</h2>
+                    <p>{error.message}</p>
+                    <pre style={{ textAlign: 'left', marginTop: '1rem' }}>{error.stack}</pre>
+                </div>
+            );
         }
     };
 
-    const renderDashboardView = () => (
-        <>
-            {/* Welcome Banner */}
-            <div className="welcome-banner">
-                <div className="banner-content">
-                    <div className="banner-text">
-                        <h2>Welcome back!</h2>
-                        <p>Send bulk emails and WhatsApp messages to your contacts. Upload your database and start your campaign!</p>
-                    </div>
-                    <div className="banner-actions">
-                        <button className="btn btn-light" onClick={() => setShowUploadModal(true)}>
-                            <Upload size={18} />
-                            Upload Contacts
-                        </button>
-                        <button className="btn btn-primary" onClick={() => openComposeModal(null)}>
-                            <Plus size={18} />
-                            New Campaign
-                        </button>
-                    </div>
-                </div>
-                <div className="banner-decoration"></div>
-            </div>
-
-            {/* Statistics */}
-            <div className="stats-grid">
-                <div className="stat-card stat-card-primary">
-                    <div className="stat-card-content">
-                        <div className="stat-info">
-                            <span className="stat-label">Total Contacts</span>
-                            <span className="stat-value">{stats.totalContacts}</span>
-                            <span className="stat-change positive">
-                                <Users size={14} />
-                                Database
-                            </span>
-                        </div>
-                        <div className="stat-icon-wrapper stat-icon-primary">
-                            <Users size={24} />
-                        </div>
-                    </div>
-                    <div className="stat-progress">
-                        <div className="stat-progress-bar" style={{ width: '100%' }}></div>
-                    </div>
-                </div>
-
-                <div className="stat-card stat-card-success">
-                    <div className="stat-card-content">
-                        <div className="stat-info">
-                            <span className="stat-label">Emails Sent</span>
-                            <span className="stat-value">{stats.emailsSent}</span>
-                            <span className="stat-change positive">
-                                <Mail size={14} />
-                                Delivered
-                            </span>
-                        </div>
-                        <div className="stat-icon-wrapper stat-icon-success">
-                            <Mail size={24} />
-                        </div>
-                    </div>
-                    <div className="stat-progress">
-                        <div className="stat-progress-bar success" style={{ width: stats.totalContacts > 0 ? `${(stats.emailsSent / stats.totalContacts) * 100}%` : '0%' }}></div>
-                    </div>
-                </div>
-
-                <div className="stat-card stat-card-info">
-                    <div className="stat-card-content">
-                        <div className="stat-info">
-                            <span className="stat-label">WhatsApp Sent</span>
-                            <span className="stat-value">{stats.whatsappSent}</span>
-                            <span className="stat-change positive">
-                                <MessageCircle size={14} />
-                                Delivered
-                            </span>
-                        </div>
-                        <div className="stat-icon-wrapper stat-icon-info">
-                            <MessageCircle size={24} />
-                        </div>
-                    </div>
-                    <div className="stat-progress">
-                        <div className="stat-progress-bar info" style={{ width: stats.totalContacts > 0 ? `${(stats.whatsappSent / stats.totalContacts) * 100}%` : '0%' }}></div>
-                    </div>
-                </div>
-
-                <div className="stat-card stat-card-warning">
-                    <div className="stat-card-content">
-                        <div className="stat-info">
-                            <span className="stat-label">Total Campaigns</span>
-                            <span className="stat-value">{stats.campaigns}</span>
-                            <span className="stat-change positive">
-                                <Layers size={14} />
-                                All time
-                            </span>
-                        </div>
-                        <div className="stat-icon-wrapper stat-icon-warning">
-                            <Layers size={24} />
-                        </div>
-                    </div>
-                    <div className="stat-progress">
-                        <div className="stat-progress-bar warning" style={{ width: '100%' }}></div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Marketing Analytics & Graphs */}
-            <div className="analytics-section">
-                <div className="analytics-grid">
-                    {/* Campaign Performance Chart */}
-                    <div className="card analytics-card">
-                        <div className="card-header">
-                            <div className="card-header-left">
-                                <h2 className="card-title">
-                                    <TrendingUp size={24} />
-                                    Campaign Performance
-                                </h2>
-                                <p className="card-description">Email vs WhatsApp delivery rates</p>
-                    </div>
-                </div>
-                        <div className="card-body">
-                            <div className="chart-container">
-                                <div className="chart-bars">
-                                    <div className="chart-bar-group">
-                                        <div className="chart-bar-label">Email</div>
-                                        <div className="chart-bar-wrapper">
-                                            <div
-                                                className="chart-bar email-bar"
-                                                style={{
-                                                    height: `${stats.totalContacts > 0 ? (stats.emailsSent / stats.totalContacts) * 100 : 0}%`,
-                                                    maxHeight: '200px'
-                                                }}
-                                            >
-                                                <span className="chart-bar-value">{stats.emailsSent}</span>
-                    </div>
-                </div>
-                    </div>
-                                    <div className="chart-bar-group">
-                                        <div className="chart-bar-label">WhatsApp</div>
-                                        <div className="chart-bar-wrapper">
-                                            <div
-                                                className="chart-bar whatsapp-bar"
-                                                style={{
-                                                    height: `${stats.totalContacts > 0 ? (stats.whatsappSent / stats.totalContacts) * 100 : 0}%`,
-                                                    maxHeight: '200px'
-                                                }}
-                                            >
-                                                <span className="chart-bar-value">{stats.whatsappSent}</span>
-                </div>
-                    </div>
-                </div>
-                    </div>
-                                <div className="chart-legend">
-                                    <div className="legend-item">
-                                        <span className="legend-color email"></span>
-                                        <span>Email Campaigns</span>
-                                    </div>
-                                    <div className="legend-item">
-                                        <span className="legend-color whatsapp"></span>
-                                        <span>WhatsApp Campaigns</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Campaign Success Rate */}
-                    <div className="card analytics-card">
-                        <div className="card-header">
-                            <div className="card-header-left">
-                                <h2 className="card-title">
-                                    <BarChart3 size={24} />
-                                    Campaign Success Rate
-                                </h2>
-                                <p className="card-description">Overall delivery statistics</p>
-                            </div>
-                        </div>
-                        <div className="card-body">
-                            <div className="success-metrics">
-                                {campaigns.length > 0 ? (
-                                    <>
-                                        {(() => {
-                                            const completed = campaigns.filter(c => c.status === 'completed' || c.status === 'sent').length;
-                                            const failed = campaigns.filter(c => c.status === 'failed').length;
-                                            const partial = campaigns.filter(c => c.status === 'partial').length;
-                                            const total = campaigns.length;
-                                            const successRate = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-                                            return (
-                                                <>
-                                                    <div className="metric-item">
-                                                        <div className="metric-header">
-                                                            <span className="metric-label">Success Rate</span>
-                                                            <span className="metric-value-large">{successRate}%</span>
-                                                        </div>
-                                                        <div className="metric-progress">
-                                                            <div
-                                                                className="metric-progress-bar success"
-                                                                style={{ width: `${successRate}%` }}
-                                                            ></div>
-                                                        </div>
-                                                    </div>
-                                                    <div className="metric-breakdown">
-                                                        <div className="breakdown-item success">
-                                                            <CheckCircle size={16} />
-                                                            <span>Completed: {completed}</span>
-                                                        </div>
-                                                        <div className="breakdown-item warning">
-                                                            <AlertCircle size={16} />
-                                                            <span>Partial: {partial}</span>
-                                                        </div>
-                                                        <div className="breakdown-item error">
-                                                            <AlertCircle size={16} />
-                                                            <span>Failed: {failed}</span>
-                                                        </div>
-                                                    </div>
-                                                </>
-                                            );
-                                        })()}
-                                    </>
-                                ) : (
-                                    <div className="empty-chart">
-                                        <BarChart3 size={48} />
-                                        <p>No campaign data yet</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Message Distribution */}
-                    <div className="card analytics-card">
-                        <div className="card-header">
-                            <div className="card-header-left">
-                                <h2 className="card-title">
-                                    <PieChart size={24} />
-                                    Message Distribution
-                                </h2>
-                                <p className="card-description">Email vs WhatsApp breakdown</p>
-                            </div>
-                        </div>
-                        <div className="card-body">
-                            <div className="distribution-chart">
-                                {stats.emailsSent + stats.whatsappSent > 0 ? (
-                                    <>
-                                        <div className="distribution-item">
-                                            <div className="distribution-header">
-                                                <Mail size={18} />
-                                                <span>Email</span>
-                                                <span className="distribution-percentage">
-                                                    {Math.round((stats.emailsSent / (stats.emailsSent + stats.whatsappSent)) * 100)}%
-                                                </span>
-                                            </div>
-                                            <div className="distribution-bar">
-                                                <div
-                                                    className="distribution-bar-fill email"
-                                                    style={{
-                                                        width: `${(stats.emailsSent / (stats.emailsSent + stats.whatsappSent)) * 100}%`
-                                                    }}
-                                                ></div>
-                                            </div>
-                                            <div className="distribution-value">{stats.emailsSent} messages</div>
-                                        </div>
-                                        <div className="distribution-item">
-                                            <div className="distribution-header">
-                                                <MessageCircle size={18} />
-                                                <span>WhatsApp</span>
-                                                <span className="distribution-percentage">
-                                                    {Math.round((stats.whatsappSent / (stats.emailsSent + stats.whatsappSent)) * 100)}%
-                                                </span>
-                                            </div>
-                                            <div className="distribution-bar">
-                                                <div
-                                                    className="distribution-bar-fill whatsapp"
-                                                    style={{
-                                                        width: `${(stats.whatsappSent / (stats.emailsSent + stats.whatsappSent)) * 100}%`
-                                                    }}
-                                                ></div>
-                                            </div>
-                                            <div className="distribution-value">{stats.whatsappSent} messages</div>
-                                        </div>
-                                    </>
-                                ) : (
-                                    <div className="empty-chart">
-                                        <Send size={48} />
-                                        <p>No messages sent yet</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* Campaign Timeline */}
-                    <div className="card analytics-card">
-                        <div className="card-header">
-                            <div className="card-header-left">
-                                <h2 className="card-title">
-                                    <Calendar size={24} />
-                                    Recent Activity
-                                </h2>
-                                <p className="card-description">Last 7 days campaign activity</p>
-                            </div>
-                        </div>
-                        <div className="card-body">
-                            <div className="timeline-chart">
-                                {(() => {
-                                    const last7Days = Array.from({ length: 7 }, (_, i) => {
-                                        const date = new Date();
-                                        date.setDate(date.getDate() - (6 - i));
-                                        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                                    });
-
-                                    const campaignCounts = last7Days.map(day => {
-                                        return campaigns.filter(c => {
-                                            const created = parseFirestoreDate(c.created_at || c.createdAt);
-                                            if (!created) return false;
-                                            const createdStr = created.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                                            return createdStr === day;
-                                        }).length;
-                                    });
-
-                                    const maxCount = Math.max(...campaignCounts, 1);
-
-                                    return (
-                                        <div className="timeline-bars">
-                                            {last7Days.map((day, index) => (
-                                                <div key={day} className="timeline-bar-group">
-                                                    <div className="timeline-bar-wrapper">
-                                                        <div
-                                                            className="timeline-bar"
-                                                            style={{
-                                                                height: `${(campaignCounts[index] / maxCount) * 100}%`,
-                                                                maxHeight: '120px'
-                                                            }}
-                                                        >
-                                                            {campaignCounts[index] > 0 && (
-                                                                <span className="timeline-bar-value">{campaignCounts[index]}</span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                    <div className="timeline-label">{day}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    );
-                                })()}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Recent Campaigns */}
-            <div className="card table-card">
-                <div className="card-header">
-                    <div className="card-header-left">
-                        <h2 className="card-title">
-                            <Layers size={24} />
-                            Recent Campaigns
-                        </h2>
-                        <p className="card-description">Your latest messaging campaigns</p>
-                    </div>
-                </div>
-                {campaigns.length === 0 ? (
-                    <div className="empty-state">
-                        <div className="empty-icon">
-                            <Send size={64} />
-                        </div>
-                        <h3>No campaigns yet</h3>
-                        <p>Start your first email or WhatsApp campaign to reach your contacts.</p>
-                        <button className="btn btn-primary" onClick={() => openComposeModal(null)}>
-                            <Plus size={20} />
-                            Create First Campaign
-                        </button>
-                    </div>
-                ) : (
-                    <div className="table-container">
-                        <table className="table">
-                            <thead>
-                                <tr>
-                                    <th>Type</th>
-                                    <th>Subject/Message</th>
-                                    <th>Recipients</th>
-                                    <th>Date</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {campaigns.slice(-5).reverse().map((campaign) => {
-                                    const failedCount = campaign.failed_count || campaign.failedCount || 0;
-                                    const canRetry = failedCount > 0 && (campaign.status === 'failed' || campaign.status === 'partial');
-                                    
-                                    return (
-                                        <tr key={campaign.id}>
-                                            <td>
-                                                <span className={`campaign-type-badge ${campaign.type}`}>
-                                                    {campaign.type === 'email' ? <Mail size={14} /> : <MessageCircle size={14} />}
-                                                    {campaign.type === 'email' ? 'Email' : 'WhatsApp'}
-                                                </span>
-                                            </td>
-                                            <td className="message-preview">
-                                                {campaign.subject || (campaign.message ? campaign.message.substring(0, 50) + '...' : 'No message')}
-                                            </td>
-                                            <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                            <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
-                                            <td>
-                                                {renderStatusBadge(campaign)}
-                                            </td>
-                                            <td>
-                                                {canRetry && (
-                                                    <button
-                                                        className="btn btn-sm btn-outline"
-                                                        onClick={() => handleRetryFailed(campaign.id)}
-                                                        disabled={loading}
-                                                        title={`Retry ${failedCount} failed message${failedCount > 1 ? 's' : ''}`}
-                                                        style={{
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '0.25rem',
-                                                            padding: '0.25rem 0.5rem',
-                                                            fontSize: '0.875rem'
-                                                        }}
-                                                    >
-                                                        <RefreshCw size={14} />
-                                                        Retry
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </>
-    );
-
-    const renderContactsView = () => (
-        <>
-            <div className="page-actions">
-                <div className="page-actions-left">
-                    <h2>All Contacts ({contacts.length})</h2>
-                </div>
-                <div className="page-actions-right">
-                    <button className="btn btn-outline" onClick={handleExportContacts}>
-                        <Download size={18} />
-                        Export
-                    </button>
-                    <button className="btn btn-primary" onClick={() => setShowUploadModal(true)}>
-                        <Upload size={18} />
-                        Upload Contacts
-                    </button>
-                </div>
-            </div>
-
-            <div className="card table-card">
-                {contacts.length === 0 ? (
-                    <div className="empty-state">
-                        <div className="empty-icon">
-                            <Users size={64} />
-                        </div>
-                        <h3>No contacts yet</h3>
-                        <p>Upload your first Excel file to start building your contact database.</p>
-                        <button className="btn btn-primary" onClick={() => setShowUploadModal(true)}>
-                            <Upload size={20} />
-                            Upload Contacts
-                        </button>
-                    </div>
-                ) : (
-                    <div className="table-container">
-                        <table className="table">
-                            <thead>
-                                <tr>
-                                    <th>Name</th>
-                                    <th>Certificate #</th>
-                                    <th>RERA No.</th>
-                                    <th>Professional</th>
-                                    <th>Email</th>
-                                    <th>Phone</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filteredContacts.map((contact) => (
-                                    <tr key={contact.id}>
-                                        <td>
-                                            <div className="recipient-cell">
-                                                <div className="recipient-avatar">
-                                                    {contact.name?.charAt(0).toUpperCase() || '?'}
-                                                </div>
-                                                <strong>{contact.name || 'Unknown'}</strong>
-                                            </div>
-                                        </td>
-                                        <td><code className="certificate-code">{contact.certificate_number || contact.certificateNumber || '-'}</code></td>
-                                        <td>{contact.rera_awarde_no || contact.reraAwardeNo || '-'}</td>
-                                        <td>{contact.professional || '-'}</td>
-                                        <td>{contact.email || '-'}</td>
-                                        <td>{contact.phone || '-'}</td>
-                                        <td>
-                                            <div className="action-buttons">
-                                                {contact.email && (
-                                                    <button
-                                                        className="action-btn action-btn-send"
-                                                        title="Open Email Client"
-                                                        onClick={() => messagingService.openEmailClient(contact, 'Hello from TSP!', 'Dear {{name}},\n\nThank you for your association with Top Selling Property.\n\nBest regards')}
-                                                    >
-                                                        <Mail size={16} />
-                                                    </button>
-                                                )}
-                                                {contact.phone && (
-                                                    <button
-                                                        className="action-btn action-btn-whatsapp"
-                                                        title="Open WhatsApp Web"
-                                                        onClick={() => messagingService.openWhatsAppWeb(contact, 'Hello {{name}}! 👋\n\nThank you for your association with Top Selling Property.\n\nwww.topsellingproperty.com')}
-                                                    >
-                                                        <MessageCircle size={16} />
-                                                    </button>
-                                                )}
-                                                <button
-                                                    className="action-btn action-btn-preview"
-                                                    title="Preview Certificate"
-                                                    onClick={() => {
-                                                        setPreviewCertificate(contact);
-                                                        setShowPreviewModal(true);
-                                                    }}
-                                                >
-                                                    <Eye size={16} />
-                                                </button>
-                                                <button
-                                                    className="action-btn action-btn-delete"
-                                                    onClick={() => handleDeleteContact(contact.id)}
-                                                    title="Delete"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </>
-    );
-
-    const renderCertificatesView = () => {
-        // Filter only actual certificates (not templates)
-        const filteredCertificates = certificates.filter(cert =>
-            cert.recipient_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            cert.certificate_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            cert.phone_number?.includes(searchQuery) ||
-            cert.email?.toLowerCase().includes(searchQuery.toLowerCase())
-        );
-
-        const handlePreview = (certificate) => {
-            setPreviewCertificate(certificate);
-            setShowPreviewModal(true);
-        };
-
-        const handleDelete = async (id, certificateNumber) => {
-            // Prevent deletion of default certificate
-            if (id === 'default') {
-                alert('Cannot delete the default certificate template. This is a system template.');
-                return;
-            }
-
-            if (!window.confirm(`Are you sure you want to delete certificate ${certificateNumber}?`)) {
-                return;
-            }
-
-            try {
-                await certificateAPI.delete(id);
-                alert('Certificate deleted successfully!');
-                // Reload certificates
-                const updatedCertificates = await certificateAPI.getAll();
-                setCertificates(Array.isArray(updatedCertificates) ? updatedCertificates : []);
-            } catch (error) {
-                console.error('Error deleting certificate:', error);
-                alert('Failed to delete certificate');
-            }
-        };
-
-        const handleDownload = (certificate) => {
-            if (certificate.pdf_url) {
-                window.open(certificate.pdf_url, '_blank');
-            } else {
-                alert('PDF URL not available for this certificate');
-            }
-        };
-
-        const handleTemplateUpload = async (e) => {
-            const file = e.target.files[0];
-            if (!file) {
-                console.log('No file selected');
-                return;
-            }
-
-            console.log('File selected:', file.name, file.type, file.size);
-
-            // Validate file type
-            if (!file.type.startsWith('image/')) {
-                alert('Please upload an image file (JPG, PNG, etc.)');
-                return;
-            }
-
-            // Validate file size (max 5MB)
-            if (file.size > 5 * 1024 * 1024) {
-                alert('File size must be less than 5MB');
-                return;
-            }
-
-            setTemplateUploading(true);
-
-            try {
-                // Convert to base64 using Promise
-                const base64String = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                        if (reader.error) {
-                            reject(reader.error);
-                        } else {
-                            resolve(reader.result);
-                        }
-                    };
-                    reader.onerror = () => {
-                        reject(new Error('Failed to read file'));
-                    };
-                    reader.readAsDataURL(file);
-                });
-
-                console.log('File converted to base64, length:', base64String.length, 'bytes', `(${(base64String.length / 1024 / 1024).toFixed(2)}MB)`);
-
-                // Check if base64 string is too large
-                if (base64String.length > 10 * 1024 * 1024) {
-                    throw new Error(`Image is too large (${(base64String.length / 1024 / 1024).toFixed(2)}MB). Please use an image smaller than 5MB.`);
-                }
-
-                console.log('Uploading to:', `${API_BASE_URL}/certificates/template`);
-
-                // Check if API URL is accessible
-                if (!API_BASE_URL || API_BASE_URL === 'undefined') {
-                    throw new Error('API URL is not configured. Please set VITE_API_URL environment variable.');
-                }
-
-                // Upload to backend with timeout
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
-
-                let response;
-                try {
-                    response = await fetch(`${API_BASE_URL}/certificates/template`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            image: base64String,
-                            filename: file.name,
-                            contentType: file.type,
-                            templateName: newTemplateName || file.name.replace(/\.[^/.]+$/, '') || 'Template'
-                        }),
-                        signal: controller.signal
-                    });
-                    clearTimeout(timeoutId);
-                } catch (fetchError) {
-                    clearTimeout(timeoutId);
-                    if (fetchError.name === 'AbortError') {
-                        throw new Error('Upload timeout: The request took too long. Please try with a smaller image or check your connection.');
-                    } else if (fetchError.message && fetchError.message.includes('Failed to fetch')) {
-                        throw new Error('Network error: Could not connect to the server. Please check your internet connection and ensure the API is accessible.');
-                    }
-                    throw fetchError;
-                }
-
-                console.log('Response status:', response.status);
-                console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-
-                let errorData;
-                let data;
-
-                try {
-                    const responseText = await response.text();
-                    console.log('Response text:', responseText.substring(0, 200));
-
-                    if (!response.ok) {
-                        try {
-                            errorData = JSON.parse(responseText);
-                        } catch (parseError) {
-                            errorData = {
-                                error: `Server error (${response.status})`,
-                                details: responseText.substring(0, 200) || response.statusText
-                            };
-                        }
-                        console.error('Upload error response:', errorData);
-                        throw new Error(errorData.error || errorData.details || `Upload failed with status ${response.status}: ${response.statusText}`);
-                    }
-
-                    try {
-                        data = JSON.parse(responseText);
-                    } catch (parseError) {
-                        console.error('Failed to parse response as JSON:', parseError);
-                        throw new Error('Invalid response format from server');
-                    }
-
-                    console.log('Upload successful:', data);
-
-                    if (data.success && data.data) {
-                        alert('Certificate template uploaded successfully!');
-                        setNewTemplateName('');
-                        setShowTemplateUpload(false);
-                        // Reload all templates
-                        try {
-                            const templatesResponse = await fetch(`${API_BASE_URL}/certificates/templates`);
-                            if (templatesResponse.ok) {
-                                const templatesData = await templatesResponse.json();
-                                if (templatesData.success && Array.isArray(templatesData.data)) {
-                                    setCertificateTemplates(templatesData.data);
-                                }
-                            }
-                        } catch (loadError) {
-                            console.warn('Could not reload templates:', loadError);
-                        }
-                    } else {
-                        throw new Error(data.error || data.message || 'Invalid response from server');
-                    }
-                } catch (fetchError) {
-                    // If it's already an Error with message, rethrow it
-                    if (fetchError instanceof Error && fetchError.message) {
-                        throw fetchError;
-                    }
-                    // Otherwise create a new error
-                    throw new Error(fetchError.message || 'Failed to process server response');
-                }
-            } catch (error) {
-                console.error('Error uploading template:', error);
-                console.error('Error stack:', error.stack);
-
-                // More detailed error messages
-                let errorMessage = 'Failed to upload template';
-
-                if (error.message) {
-                    errorMessage = error.message;
-                } else if (error.name === 'TypeError' && error.message.includes('fetch')) {
-                    errorMessage = 'Network error: Could not connect to server. Please check your internet connection and API URL.';
-                } else if (error.name === 'SyntaxError') {
-                    errorMessage = 'Server response error: Invalid data format received.';
-                } else {
-                    errorMessage = `Upload failed: ${error.message || error.toString()}`;
-                }
-
-                alert(errorMessage);
-            } finally {
-                setTemplateUploading(false);
-                // Reset file input
-                e.target.value = '';
-            }
-        };
-
-
-        return (
-            <>
-                <div className="page-actions">
-                    <div className="page-actions-left">
-                        <h2>
-                            {certificateViewMode === 'certificates' 
-                                ? `Certificates (${certificates.length})` 
-                                : 'Certificate Templates'}
-                        </h2>
-                    </div>
-                    <div className="page-actions-right">
-                        {/* Toggle between Certificates and Templates */}
-                        <div style={{ 
-                            display: 'flex', 
-                            gap: '0.5rem', 
-                            alignItems: 'center',
-                            backgroundColor: '#f3f4f6',
-                            padding: '0.25rem',
-                            borderRadius: '0.5rem',
-                            marginRight: '1rem'
-                        }}>
-                        <button
-                                className={`btn ${certificateViewMode === 'certificates' ? 'btn-primary' : 'btn-outline'}`}
-                                onClick={() => setCertificateViewMode('certificates')}
-                                style={{ 
-                                    padding: '0.5rem 1rem',
-                                    fontSize: '0.875rem',
-                                    border: 'none',
-                                    borderRadius: '0.375rem',
-                                    cursor: 'pointer',
-                                    whiteSpace: 'nowrap'
-                                }}
-                            >
-                                <Award size={16} style={{ marginRight: '0.25rem' }} />
-                                Certificates
-                            </button>
-                            <button
-                                className={`btn ${certificateViewMode === 'templates' ? 'btn-primary' : 'btn-outline'}`}
-                                onClick={() => setCertificateViewMode('templates')}
-                                style={{ 
-                                    padding: '0.5rem 1rem',
-                                    fontSize: '0.875rem',
-                                    border: 'none',
-                                    borderRadius: '0.375rem',
-                                    cursor: 'pointer',
-                                    whiteSpace: 'nowrap'
-                                }}
-                            >
-                                <FileImage size={16} style={{ marginRight: '0.25rem' }} />
-                                Templates
-                        </button>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Show Certificates View */}
-                {certificateViewMode === 'certificates' && (
-                    <div className="card table-card">
-                        <div className="card-header">
-                            <div className="card-header-left">
-                                <h2 className="card-title">
-                                    <Award size={24} />
-                                    All Certificates
-                                </h2>
-                                <p className="card-description">
-                                    {searchQuery
-                                        ? `Showing ${filteredCertificates.length} of ${certificates.length} certificates`
-                                        : `Manage all ${certificates.length} generated certificates for contacts`
-                                    }
-                                </p>
-                            </div>
-                        </div>
-
-                        {loading ? (
-                            <div className="loading-container">
-                                <div className="spinner"></div>
-                                <p>Loading certificates...</p>
-                            </div>
-                        ) : filteredCertificates.length === 0 ? (
-                            <div className="empty-state">
-                                <div className="empty-icon">
-                                    <Award size={64} />
-                                </div>
-                                <h3>{searchQuery ? 'No certificates found' : 'No certificates yet'}</h3>
-                                <p>
-                                    {searchQuery
-                                        ? `No certificates match "${searchQuery}". Try a different search term.`
-                                        : 'Certificates will appear here once they are created for contacts.'
-                                    }
-                                </p>
-                            </div>
-                        ) : (
-                            <div className="table-container">
-                                <table className="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Recipient</th>
-                                            <th>Certificate #</th>
-                                            <th>Phone</th>
-                                            <th>Email</th>
-                                            <th>Status</th>
-                                            <th>Created</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {filteredCertificates.map((cert) => (
-                                            <tr key={cert.id}>
-                                                <td>
-                                                    <div className="recipient-cell">
-                                                        <div className="recipient-avatar">
-                                                            {cert.recipient_name?.charAt(0).toUpperCase() || 'U'}
-                                                        </div>
-                                                        <div className="recipient-info">
-                                                            <strong>{cert.recipient_name}</strong>
-                                                            {cert.award_rera_number && (
-                                                                <span className="recipient-subtext">RERA: {cert.award_rera_number}</span>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                </td>
-                                                <td>
-                                                    <code className="certificate-code">
-                                                        {cert.certificate_number}
-                                                    </code>
-                                                </td>
-                                                <td>
-                                                    <span className="phone-number">{cert.phone_number || '-'}</span>
-                                                </td>
-                                                <td>
-                                                    <span>{cert.email || '-'}</span>
-                                                </td>
-                                                <td>
-                                                    {cert.whatsapp_sent ? (
-                                                        <span className="badge badge-success">
-                                                            <CheckCircle size={12} />
-                                                            Sent
-                                                        </span>
-                                                    ) : (
-                                                        <span className="badge badge-warning">
-                                                            <Clock size={12} />
-                                                            Pending
-                                                        </span>
-                                                    )}
-                                                </td>
-                                                <td>
-                                                    <span className="date-cell">
-                                                        {formatDate(cert.created_at)}
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <div className="action-buttons">
-                                                        <button
-                                                            className="action-btn action-btn-view"
-                                                            onClick={() => handlePreview(cert)}
-                                                            title="Preview Certificate"
-                                                        >
-                                                            <Eye size={16} />
-                                                        </button>
-                                                        <button
-                                                            className="action-btn action-btn-download"
-                                                            onClick={() => handleDownload(cert)}
-                                                            title="Download PDF"
-                                                        >
-                                                            <Download size={16} />
-                                                        </button>
-                                                        <button
-                                                            className="action-btn action-btn-delete"
-                                                            onClick={() => handleDelete(cert.id, cert.certificate_number)}
-                                                            title="Delete"
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </div>
-                )}
-
-                {/* Show Certificate Templates View */}
-                {certificateViewMode === 'templates' && (
-                    <>
-                        {/* Upload New Template Section */}
-                        <div className="card template-upload-card">
-                            <div className="card-header">
-                                <div className="card-header-left">
-                                    <h2 className="card-title">
-                                        <Upload size={24} />
-                                        Upload New Template
-                                    </h2>
-                                    <p className="card-description">
-                                        Upload a blank certificate image. Names and information will be automatically added when creating certificates.
-                                    </p>
-                                </div>
-                            </div>
-                            <div className="card-body">
-                                <div className="form-group" style={{ marginBottom: '1rem' }}>
-                                    <label className="form-label">
-                                        Template Name
-                                    </label>
-                                    <input
-                                        type="text"
-                                        className="form-input"
-                                        placeholder="Enter template name (e.g., 'Default Template', 'Award Certificate')"
-                                        value={newTemplateName}
-                                        onChange={(e) => setNewTemplateName(e.target.value)}
-                                        disabled={templateUploading}
-                                    />
-                                </div>
-                            <div className="form-group template-upload-group">
-                                <label className="form-label template-upload-label">
-                                    <Upload size={20} />
-                                    Upload Blank Certificate Image
-                                </label>
-                                <div className="file-upload-wrapper">
-                                    <input
-                                        type="file"
-                                        id="template-upload-input"
-                                        accept="image/jpeg,image/jpg,image/png,image/gif"
-                                        onChange={handleTemplateUpload}
-                                        disabled={templateUploading}
-                                        className="file-upload-input"
-                                    />
-                                    <label
-                                        htmlFor="template-upload-input"
-                                        className="file-upload-label"
-                                        style={{
-                                            opacity: templateUploading ? 0.6 : 1,
-                                            cursor: templateUploading ? 'not-allowed' : 'pointer'
-                                        }}
-                                    >
-                                        {templateUploading ? (
-                                            <div className="upload-loading-state">
-                                                <div className="spinner" style={{ width: '24px', height: '24px', borderWidth: '3px', borderColor: 'var(--primary)', borderTopColor: 'transparent' }}></div>
-                                                <span>Uploading template...</span>
-                                            </div>
-                                        ) : (
-                                            <div className="upload-ready-state">
-                                                <div className="upload-icon-wrapper">
-                                                    <Upload size={32} />
-                                                </div>
-                                                <span className="upload-text">Choose Image File</span>
-                                                <span className="upload-subtext">Click or drag to upload</span>
-                                            </div>
-                                        )}
-                                    </label>
-                                </div>
-                                <div className="template-upload-hint">
-                                    <div className="hint-icon">ℹ️</div>
-                                    <div className="hint-content">
-                                        <strong>Supported formats:</strong> JPG, PNG
-                                        <br />
-                                        <strong>Max size:</strong> 5MB
-                                        <br />
-                                        <span className="hint-note">The image will be used as the background for all certificates</span>
-                                    </div>
-                                </div>
-                            </div>
-                                </div>
-                        </div>
-
-                        {/* All Templates List */}
-                        <div className="card table-card" style={{ marginTop: '1.5rem' }}>
-                    <div className="card-header">
-                        <div className="card-header-left">
-                            <h2 className="card-title">
-                                        <FileImage size={24} />
-                                        All Templates ({certificateTemplates.length})
-                            </h2>
-                            <p className="card-description">
-                                        Manage your certificate templates. Set one as default to use for new certificates.
-                            </p>
-                        </div>
-                    </div>
-                    {loading ? (
-                        <div className="loading-container">
-                            <div className="spinner"></div>
-                                    <p>Loading templates...</p>
-                        </div>
-                            ) : certificateTemplates.length === 0 ? (
-                        <div className="empty-state">
-                            <div className="empty-icon">
-                                        <FileImage size={64} />
-                            </div>
-                                    <h3>No templates yet</h3>
-                                    <p>Upload your first certificate template to get started.</p>
-                        </div>
-                    ) : (
-                        <div className="table-container">
-                            <table className="table">
-                                <thead>
-                                    <tr>
-                                                <th>Template</th>
-                                                <th>Name</th>
-                                                <th>Filename</th>
-                                        <th>Status</th>
-                                                <th>Uploaded</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                            {certificateTemplates.map((template) => (
-                                                <tr key={template.id}>
-                                                    <td>
-                                                        <div style={{ width: '120px', height: '80px', overflow: 'hidden', borderRadius: '4px', border: '1px solid var(--border-color)' }}>
-                                                            <img
-                                                                src={template.url}
-                                                                alt={template.name}
-                                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                                            />
-                                                </div>
-                                            </td>
-                                            <td>
-                                                        <strong>{template.name || 'Unnamed Template'}</strong>
-                                            </td>
-                                            <td>
-                                                        <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                                                            {template.filename || 'N/A'}
-                                                        </span>
-                                            </td>
-                                            <td>
-                                                        {template.is_default ? (
-                                                    <span className="badge badge-success">
-                                                        <CheckCircle size={12} />
-                                                                Default
-                                                    </span>
-                                                        ) : (
-                                                            <span className="badge badge-info">Active</span>
-                                                )}
-                                            </td>
-                                            <td>
-                                                <span className="date-cell">
-                                                            {template.uploaded_at ? formatDate(template.uploaded_at) : 'N/A'}
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <div className="action-buttons">
-                                                            {!template.is_default && (
-                                                    <button
-                                                        className="action-btn action-btn-view"
-                                                                    onClick={async () => {
-                                                                        try {
-                                                                            const response = await fetch(`${API_BASE_URL}/certificates/template/${template.id}/set-default`, {
-                                                                                method: 'POST'
-                                                                            });
-                                                                            if (response.ok) {
-                                                                                alert('Default template updated successfully!');
-                                                                                // Reload templates
-                                                                                const templatesResponse = await fetch(`${API_BASE_URL}/certificates/templates`);
-                                                                                if (templatesResponse.ok) {
-                                                                                    const templatesData = await templatesResponse.json();
-                                                                                    if (templatesData.success && Array.isArray(templatesData.data)) {
-                                                                                        setCertificateTemplates(templatesData.data);
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        } catch (error) {
-                                                                            console.error('Error setting default template:', error);
-                                                                            alert('Failed to set default template');
-                                                                        }
-                                                                    }}
-                                                                    title="Set as Default"
-                                                                >
-                                                                    <Star size={16} />
-                                                    </button>
-                                                            )}
-                                                        <button
-                                                            className="action-btn action-btn-delete"
-                                                                onClick={async () => {
-                                                                    if (window.confirm(`Are you sure you want to delete "${template.name}"?`)) {
-                                                                        try {
-                                                                            const response = await fetch(`${API_BASE_URL}/certificates/template/${template.id}`, {
-                                                                                method: 'DELETE'
-                                                                            });
-                                                                            if (response.ok) {
-                                                                                alert('Template deleted successfully!');
-                                                                                // Reload templates
-                                                                                const templatesResponse = await fetch(`${API_BASE_URL}/certificates/templates`);
-                                                                                if (templatesResponse.ok) {
-                                                                                    const templatesData = await templatesResponse.json();
-                                                                                    if (templatesData.success && Array.isArray(templatesData.data)) {
-                                                                                        setCertificateTemplates(templatesData.data);
-                                                                                    }
-                                                                                }
-                                                                            } else {
-                                                                                const errorData = await response.json();
-                                                                                alert(errorData.error || 'Failed to delete template');
-                                                                            }
-                                                                        } catch (error) {
-                                                                            console.error('Error deleting template:', error);
-                                                                            alert('Failed to delete template');
-                                                                        }
-                                                                    }
-                                                                }}
-                                                                title="Delete Template"
-                                                        >
-                                                            <Trash2 size={16} />
-                                                        </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-                </div>
-                    </>
-                )}
-            </>
-        );
-    };
-
-    const renderEmailView = () => (
-        <>
-            <div className="page-actions">
-                <div className="page-actions-left">
-                    <h2>Email Campaigns</h2>
-                </div>
-                <div className="page-actions-right">
-                    <button className="btn btn-primary" onClick={() => openComposeModal('email')}>
-                        <Plus size={18} />
-                        New Email Campaign
-                    </button>
-                </div>
-            </div>
-
-            <div className="campaign-intro-card">
-                <div className="campaign-intro-icon email">
-                    <Mail size={48} />
-                </div>
-                <div className="campaign-intro-content">
-                    <h3>Send Bulk Emails</h3>
-                    <p>Create professional email campaigns and send them to your contact database. Use personalization tokens to make each email unique.</p>
-                    <button className="btn btn-primary" onClick={() => openComposeModal('email')}>
-                        <Send size={18} />
-                        Compose Email
-                    </button>
-                </div>
-            </div>
-
-            <div className="card table-card">
-                <div className="card-header">
-                    <h2 className="card-title">Email Campaign History</h2>
-                </div>
-                {campaigns.filter(c => c.type === 'email').length === 0 ? (
-                    <div className="empty-state small">
-                        <p>No email campaigns sent yet.</p>
-                    </div>
-                ) : (
-                    <div className="table-container">
-                        <table className="table">
-                            <thead>
-                                <tr>
-                                    <th>Subject</th>
-                                    <th>Recipients</th>
-                                    <th>Date</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {campaigns.filter(c => c.type === 'email').reverse().map((campaign) => {
-                                    const failedCount = campaign.failed_count || campaign.failedCount || 0;
-                                    const canRetry = failedCount > 0 && (campaign.status === 'failed' || campaign.status === 'partial');
-                                    
-                                    return (
-                                        <tr key={campaign.id}>
-                                            <td>{campaign.subject}</td>
-                                            <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                            <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
-                                            <td>
-                                                {renderStatusBadge(campaign)}
-                                            </td>
-                                            <td>
-                                                {canRetry && (
-                                                    <button
-                                                        className="btn btn-sm btn-outline"
-                                                        onClick={() => handleRetryFailed(campaign.id)}
-                                                        disabled={loading}
-                                                        title={`Retry ${failedCount} failed message${failedCount > 1 ? 's' : ''}`}
-                                                        style={{
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '0.25rem',
-                                                            padding: '0.25rem 0.5rem',
-                                                            fontSize: '0.875rem'
-                                                        }}
-                                                    >
-                                                        <RefreshCw size={14} />
-                                                        Retry
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </>
-    );
-
-    const renderWhatsAppView = () => (
-        <>
-            <div className="page-actions">
-                <div className="page-actions-left">
-                    <h2>WhatsApp Messages</h2>
-                </div>
-                <div className="page-actions-right">
-                    <button className="btn btn-primary" onClick={() => openComposeModal('whatsapp')}>
-                        <Plus size={18} />
-                        New WhatsApp Campaign
-                    </button>
-                </div>
-            </div>
-
-            <div className="campaign-intro-card whatsapp">
-                <div className="campaign-intro-icon whatsapp">
-                    <MessageCircle size={48} />
-                </div>
-                <div className="campaign-intro-content">
-                    <h3>Send Bulk WhatsApp Messages</h3>
-                    <p>Reach your contacts directly through WhatsApp. Great for quick updates, promotions, and personal communication.</p>
-                    <button className="btn btn-success" onClick={() => openComposeModal('whatsapp')}>
-                        <Send size={18} />
-                        Compose Message
-                    </button>
-                </div>
-            </div>
-
-            <div className="card table-card">
-                <div className="card-header">
-                    <h2 className="card-title">WhatsApp Campaign History</h2>
-                </div>
-                {campaigns.filter(c => c.type === 'whatsapp').length === 0 ? (
-                    <div className="empty-state small">
-                        <p>No WhatsApp campaigns sent yet.</p>
-                    </div>
-                ) : (
-                    <div className="table-container">
-                        <table className="table">
-                            <thead>
-                                <tr>
-                                    <th>Message Preview</th>
-                                    <th>Recipients</th>
-                                    <th>Date</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {campaigns.filter(c => c.type === 'whatsapp').reverse().map((campaign) => {
-                                    const failedCount = campaign.failed_count || campaign.failedCount || 0;
-                                    const canRetry = failedCount > 0 && (campaign.status === 'failed' || campaign.status === 'partial');
-                                    
-                                    return (
-                                        <tr key={campaign.id}>
-                                            <td className="message-preview">{campaign.message ? campaign.message.substring(0, 50) + '...' : 'No message'}</td>
-                                            <td>{campaign.recipient_count || campaign.recipientCount || campaign.sent_count || campaign.sentCount || 0}</td>
-                                            <td>{formatDate(campaign.created_at || campaign.createdAt)}</td>
-                                            <td>
-                                                {renderStatusBadge(campaign)}
-                                            </td>
-                                            <td>
-                                                {canRetry && (
-                                                    <button
-                                                        className="btn btn-sm btn-outline"
-                                                        onClick={() => handleRetryFailed(campaign.id)}
-                                                        disabled={loading}
-                                                        title={`Retry ${failedCount} failed message${failedCount > 1 ? 's' : ''}`}
-                                                        style={{
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: '0.25rem',
-                                                            padding: '0.25rem 0.5rem',
-                                                            fontSize: '0.875rem'
-                                                        }}
-                                                    >
-                                                        <RefreshCw size={14} />
-                                                        Retry
-                                                    </button>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </>
-    );
-
+    // renderDashboardView has been moved to a separate component: DashboardView.jsx
+    // renderContactsView has been moved to a separate component: ContactsView.jsx
+    // renderCertificatesView has been moved to a separate component: CertificatesView.jsx
+    // renderEmailView has been moved to a separate component: EmailView.jsx
+    // renderWhatsAppView has been moved to a separate component: WhatsAppView.jsx
 
     // Template Management Functions - Save to Firebase
     const handleSaveTemplate = async (templateData) => {
@@ -3020,278 +2423,8 @@ function MarketingDashboard() {
     };
 
     // Templates are now loaded in loadDataFromFirebase()
-
-    const renderTemplatesView = () => (
-        <>
-            <div className="page-actions">
-                <div className="page-actions-left">
-                    <h2>Message Templates ({templates.length})</h2>
-                </div>
-                <div className="page-actions-right">
-                    <button className="btn btn-primary" onClick={() => {
-                        setEditingTemplate(null);
-                        setShowTemplateModal(true);
-                    }}>
-                        <Plus size={18} />
-                        New Template
-                    </button>
-                </div>
-            </div>
-
-            <div className="campaign-intro-card">
-                <div className="campaign-intro-icon">
-                    <BookOpen size={48} />
-                </div>
-                <div className="campaign-intro-content">
-                    <h3>Create Reusable Templates</h3>
-                    <p>Save time by creating message templates for your email and WhatsApp campaigns. Use personalization tokens like {"{{name}}"} to customize each message.</p>
-                </div>
-            </div>
-
-            {templates.length === 0 ? (
-                <div className="card table-card">
-                    <div className="empty-state">
-                        <div className="empty-icon">
-                            <BookOpen size={64} />
-                        </div>
-                        <h3>No templates yet</h3>
-                        <p>Create your first template to speed up your campaigns.</p>
-                        <button className="btn btn-primary" onClick={() => {
-                            setEditingTemplate(null);
-                            setShowTemplateModal(true);
-                        }}>
-                            <Plus size={20} />
-                            Create Template
-                        </button>
-                    </div>
-                </div>
-            ) : (
-                <div className="templates-grid">
-                    {templates.map(template => (
-                        <div key={template.id} className="template-card">
-                            <div className="template-header">
-                                <span className={`campaign-type-badge ${template.type}`}>
-                                    {template.type === 'email' ? <Mail size={14} /> : <MessageCircle size={14} />}
-                                    {template.type === 'email' ? 'Email' : 'WhatsApp'}
-                                </span>
-                                <div className="template-actions">
-                                    <button className="action-btn" title="Use Template" onClick={() => {
-                                        setComposeType(template.type);
-                                        setShowComposeModal(true);
-                                    }}>
-                                        <Send size={16} />
-                                    </button>
-                                    <button className="action-btn action-btn-edit" title="Edit Template" onClick={() => {
-                                        setEditingTemplate(template);
-                                        setShowTemplateModal(true);
-                                    }}>
-                                        <Edit size={16} />
-                                    </button>
-                                    <button className="action-btn action-btn-delete" title="Delete" onClick={() => handleDeleteTemplate(template.id)}>
-                                        <Trash2 size={16} />
-                                    </button>
-                                </div>
-                            </div>
-                            <h3 className="template-name">{template.name}</h3>
-                            {template.subject && <p className="template-subject">Subject: {template.subject}</p>}
-                            <p className="template-preview">{template.content ? template.content.substring(0, 100) + '...' : 'No content'}</p>
-                            <div className="template-footer">
-                                <span className="template-date">Created {formatDate(template.createdAt)}</span>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Template Creation/Edit Modal */}
-            {showTemplateModal && (
-                <div className="modal-overlay" onClick={() => {
-                    setShowTemplateModal(false);
-                    setEditingTemplate(null);
-                }}>
-                    <div className="modal" onClick={(e) => e.stopPropagation()}>
-                        <div className="modal-header">
-                            <div>
-                                <h2 className="modal-title">{editingTemplate ? 'Edit Template' : 'Create Template'}</h2>
-                                <p className="modal-subtitle">{editingTemplate ? 'Update your message template' : 'Save a reusable message template'}</p>
-                            </div>
-                            <button className="modal-close" onClick={() => {
-                                setShowTemplateModal(false);
-                                setEditingTemplate(null);
-                            }}>
-                                <X size={24} />
-                            </button>
-                        </div>
-                        <form onSubmit={(e) => {
-                            e.preventDefault();
-                            const formData = new FormData(e.target);
-                            handleSaveTemplate({
-                                name: formData.get('name'),
-                                type: formData.get('type'),
-                                subject: formData.get('subject'),
-                                content: formData.get('content')
-                            });
-                            setShowTemplateModal(false);
-                            setEditingTemplate(null);
-                        }}>
-                            <div className="modal-body">
-                                <div className="form-group">
-                                    <label>Template Name</label>
-                                    <input 
-                                        type="text" 
-                                        name="name" 
-                                        className="form-input" 
-                                        placeholder="e.g., Welcome Email" 
-                                        defaultValue={editingTemplate?.name || ''}
-                                        required 
-                                    />
-                                </div>
-                                <div className="form-group">
-                                    <label>Type</label>
-                                    <select name="type" className="form-input" required defaultValue={editingTemplate?.type || ''}>
-                                        <option value="">Select type...</option>
-                                        <option value="email">Email</option>
-                                        <option value="whatsapp">WhatsApp</option>
-                                    </select>
-                                </div>
-                                <div className="form-group">
-                                    <label>Subject (for Email)</label>
-                                    <input 
-                                        type="text" 
-                                        name="subject" 
-                                        className="form-input" 
-                                        placeholder="Email subject line" 
-                                        defaultValue={editingTemplate?.subject || ''}
-                                    />
-                                </div>
-                                <div className="form-group">
-                                    <label>Message Content</label>
-                                    <textarea 
-                                        name="content" 
-                                        className="form-textarea" 
-                                        placeholder="Your message content..." 
-                                        rows={6} 
-                                        defaultValue={editingTemplate?.content || ''}
-                                        required 
-                                    />
-                                </div>
-                                <div className="personalization-hint">
-                                    <Zap size={16} />
-                                    <span>Use <code>{"{{name}}"}</code>, <code>{"{{certificate}}"}</code>, <code>{"{{rera}}"}</code> for personalization</span>
-                                </div>
-                            </div>
-                            <div className="modal-footer">
-                                <button 
-                                    type="button" 
-                                    className="btn btn-secondary" 
-                                    onClick={() => {
-                                        setShowTemplateModal(false);
-                                        setEditingTemplate(null);
-                                    }}
-                                >
-                                    Cancel
-                                </button>
-                                <button type="submit" className="btn btn-primary">
-                                    <Save size={18} />
-                                    {editingTemplate ? 'Update Template' : 'Save Template'}
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            )}
-        </>
-    );
-
-    const renderScheduledView = () => {
-        const scheduledItems = campaigns.filter(c => c.status === 'scheduled');
-
-        return (
-            <>
-                <div className="page-actions">
-                    <div className="page-actions-left">
-                        <h2>Scheduled Campaigns ({scheduledItems.length})</h2>
-                    </div>
-                </div>
-
-                <div className="campaign-intro-card">
-                    <div className="campaign-intro-icon">
-                        <Calendar size={48} />
-                    </div>
-                    <div className="campaign-intro-content">
-                        <h3>Schedule Your Campaigns</h3>
-                        <p>Plan ahead by scheduling your email and WhatsApp campaigns to be sent at the perfect time. Set it and forget it!</p>
-                    </div>
-                </div>
-
-                <div className="card table-card">
-                    {scheduledItems.length === 0 ? (
-                        <div className="empty-state">
-                            <div className="empty-icon">
-                                <Calendar size={64} />
-                            </div>
-                            <h3>No scheduled campaigns</h3>
-                            <p>You haven't scheduled any campaigns yet. When creating a campaign, choose a future date to schedule it.</p>
-                            <button className="btn btn-primary" onClick={() => openComposeModal(null)}>
-                                <Plus size={20} />
-                                Create Campaign
-                            </button>
-                        </div>
-                    ) : (
-                        <div className="table-container">
-                            <table className="table">
-                                <thead>
-                                    <tr>
-                                        <th>Type</th>
-                                        <th>Message</th>
-                                        <th>Recipients</th>
-                                        <th>Scheduled For</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {scheduledItems.map((campaign) => (
-                                        <tr key={campaign.id}>
-                                            <td>
-                                                <span className={`campaign-type-badge ${campaign.type}`}>
-                                                    {campaign.type === 'email' ? <Mail size={14} /> : <MessageCircle size={14} />}
-                                                    {campaign.type === 'email' ? 'Email' : 'WhatsApp'}
-                                                </span>
-                                            </td>
-                                            <td className="message-preview">
-                                                {campaign.subject || campaign.message?.substring(0, 50) + '...'}
-                                            </td>
-                                            <td>{campaign.sentCount || campaign.recipientCount || 0}</td>
-                                            <td>
-                                                <span className="scheduled-time">
-                                                    <Clock size={14} />
-                                                    {campaign.scheduledAt ? formatDateTime(campaign.scheduledAt) : 'Not set'}
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <span className="badge badge-warning">
-                                                    <Clock size={12} />
-                                                    Scheduled
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <div className="action-buttons">
-                                                    <button className="action-btn action-btn-delete" title="Cancel">
-                                                        <X size={16} />
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-                </div>
-            </>
-        );
-    };
+    // renderTemplatesView has been moved to a separate component: TemplatesView.jsx
+    // renderScheduledView has been moved to a separate component: ScheduledView.jsx
 
     // Always render, even if loading or errors occur
     return (
@@ -3385,7 +2518,8 @@ function MarketingDashboard() {
                         left: 0,
                         right: 0,
                         bottom: 0,
-                        zIndex: 999
+                        zIndex: 998,
+                        backgroundColor: 'transparent'
                     }}
                     onClick={() => setShowNotifications(false)}
                 />
@@ -3394,7 +2528,7 @@ function MarketingDashboard() {
             {/* Main Content */}
             <div className={`main-content ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
                 {/* Header */}
-                <header className="main-header">
+                <header className="main-header" style={{ position: 'relative', zIndex: 1000 }}>
                     <div className="header-left">
                         <button className="mobile-menu-btn" onClick={() => setMobileMenuOpen(true)}>
                             <Menu size={24} />
@@ -3405,7 +2539,7 @@ function MarketingDashboard() {
                         </div>
                     </div>
 
-                    <div className="header-right">
+                    <div className="header-right" style={{ position: 'relative', zIndex: 1001 }}>
                         {(activeTab === 'contacts' || activeTab === 'social-media' || activeTab === 'certificates') && (
                             <div className="header-search">
                                 <Search size={18} className="search-icon" />
@@ -3484,10 +2618,43 @@ function MarketingDashboard() {
                             </div>
                         )}
 
-                        <div className="notification-container" style={{ position: 'relative' }}>
+                        {/* Background Jobs Notification */}
+                        <BackgroundJobsNotification
+                            backgroundJobs={backgroundJobs}
+                            onJobClick={() => {
+                                if (backgroundJobs.length > 0) {
+                                    // Aggregate all active jobs
+                                    const activeJobs = backgroundJobs.filter(job => {
+                                        const remaining = job.totalMessages - job.sentMessages - job.failedMessages;
+                                        return remaining > 0;
+                                    });
+                                    
+                                    if (activeJobs.length > 0) {
+                                        const totalMessages = activeJobs.reduce((sum, job) => sum + job.totalMessages, 0);
+                                        const sentMessages = activeJobs.reduce((sum, job) => sum + job.sentMessages, 0);
+                                        const failedMessages = activeJobs.reduce((sum, job) => sum + job.failedMessages, 0);
+                                        
+                                        setShowSendingLoader(true);
+                                        setIsBackgroundMode(true);
+                                        setCurrentJobId(activeJobs[0].id); // Use first job ID for display
+                                        setSendingProgress({
+                                            totalMessages,
+                                            sentMessages,
+                                            failedMessages
+                                        });
+                                    }
+                                }
+                            }}
+                        />
+
+                        <div className="notification-container" style={{ position: 'relative', zIndex: 10001 }}>
                             <button 
                                 className="header-icon-btn notification-btn"
-                                onClick={() => setShowNotifications(!showNotifications)}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setShowNotifications(!showNotifications);
+                                }}
+                                style={{ position: 'relative', zIndex: 10001 }}
                             >
                                 <Bell size={20} />
                                 {unreadCount > 0 && (
@@ -3500,9 +2667,8 @@ function MarketingDashboard() {
                                     className="notification-dropdown"
                                     style={{
                                         position: 'absolute',
-                                        top: '100%',
+                                        top: 'calc(100% + 8px)',
                                         right: 0,
-                                        marginTop: '8px',
                                         backgroundColor: 'white',
                                         borderRadius: '8px',
                                         boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
@@ -3510,35 +2676,166 @@ function MarketingDashboard() {
                                         maxWidth: '400px',
                                         maxHeight: '400px',
                                         overflowY: 'auto',
-                                        zIndex: 1000,
+                                        zIndex: 10002,
                                         border: '1px solid #e5e7eb'
                                     }}
+                                    onClick={(e) => e.stopPropagation()}
                                 >
-                                    <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
-                                            Notifications
-                                        </h3>
-                                        {unreadCount > 0 && (
-                                            <button
-                                                onClick={async () => {
-                                                    try {
-                                                        await notificationsService.markAllAsRead();
-                                                        loadNotifications();
-                                                    } catch (error) {
-                                                        console.error('Error marking all as read:', error);
-                                                    }
-                                                }}
-                                                style={{
-                                                    fontSize: '12px',
-                                                    color: '#3b82f6',
-                                                    background: 'none',
-                                                    border: 'none',
-                                                    cursor: 'pointer',
-                                                    padding: '4px 8px'
-                                                }}
-                                            >
-                                                Mark all read
-                                            </button>
+                                    <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: notificationsEnabled ? '0' : '8px' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '600', color: '#1f2937' }}>
+                                                    Notifications
+                                                </h3>
+                                                {notificationsEnabled && (
+                                                    <span style={{
+                                                        fontSize: '10px',
+                                                        color: '#10b981',
+                                                        backgroundColor: '#d1fae5',
+                                                        padding: '2px 6px',
+                                                        borderRadius: '4px',
+                                                        fontWeight: '500'
+                                                    }}>
+                                                        Enabled
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {unreadCount > 0 && (
+                                                <button
+                                                    onClick={async () => {
+                                                        try {
+                                                            await notificationsService.markAllAsRead();
+                                                            loadNotifications();
+                                                        } catch (error) {
+                                                            console.error('Error marking all as read:', error);
+                                                        }
+                                                    }}
+                                                    style={{
+                                                        fontSize: '12px',
+                                                        color: '#3b82f6',
+                                                        background: 'none',
+                                                        border: 'none',
+                                                        cursor: 'pointer',
+                                                        padding: '4px 8px'
+                                                    }}
+                                                >
+                                                    Mark all read
+                                                </button>
+                                            )}
+                                        </div>
+                                        {!notificationsEnabled && (
+                                            <div style={{ 
+                                                padding: '8px 12px', 
+                                                backgroundColor: getNotificationPermission() === 'denied' ? '#fee2e2' : '#fef3c7', 
+                                                borderRadius: '6px',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                fontSize: '12px',
+                                                color: getNotificationPermission() === 'denied' ? '#991b1b' : '#92400e'
+                                            }}>
+                                                <span>
+                                                    {getNotificationPermission() === 'denied' 
+                                                        ? 'Notifications blocked - enable in browser settings' 
+                                                        : 'Browser notifications disabled'}
+                                                </span>
+                                                <button
+                                                    onClick={async () => {
+                                                        try {
+                                                            const currentPermission = getNotificationPermission();
+                                                            console.log('[Notifications] Current permission before request:', currentPermission);
+                                                            
+                                                            if (currentPermission === 'denied') {
+                                                                // Permission was previously denied - show instructions
+                                                                const userAgent = navigator.userAgent.toLowerCase();
+                                                                let instructions = 'Notifications are blocked. Please enable them in your browser settings:\n\n';
+                                                                
+                                                                if (userAgent.includes('chrome') || userAgent.includes('chromium')) {
+                                                                    instructions += 'Chrome: Click the lock icon in the address bar → Site settings → Notifications → Allow';
+                                                                } else if (userAgent.includes('firefox')) {
+                                                                    instructions += 'Firefox: Click the lock icon → More Information → Permissions → Notifications → Allow';
+                                                                } else if (userAgent.includes('safari')) {
+                                                                    instructions += 'Safari: Safari → Preferences → Websites → Notifications → Allow for this site';
+                                                                } else if (userAgent.includes('edge')) {
+                                                                    instructions += 'Edge: Click the lock icon → Site permissions → Notifications → Allow';
+                                                                } else {
+                                                                    instructions += 'Go to your browser settings and allow notifications for this site';
+                                                                }
+                                                                
+                                                                alert(instructions);
+                                                                // Re-check permission after showing instructions
+                                                                setTimeout(() => {
+                                                                    const newPermission = getNotificationPermission();
+                                                                    setNotificationsEnabled(newPermission === 'granted');
+                                                                }, 1000);
+                                                                return;
+                                                            }
+                                                            
+                                                            if (currentPermission === 'unsupported') {
+                                                                alert('Your browser does not support notifications.');
+                                                                return;
+                                                            }
+                                                            
+                                                            // Request permission (will only work if permission is 'default')
+                                                            const permission = await requestNotificationPermission();
+                                                            console.log('[Notifications] Permission after request:', permission);
+                                                            
+                                                            const isEnabled = permission === 'granted';
+                                                            setNotificationsEnabled(isEnabled);
+                                                            
+                                                            if (isEnabled) {
+                                                                console.log('✅ Browser notifications enabled');
+                                                                // Show a test notification
+                                                                try {
+                                                                    const testNotification = new Notification('Notifications Enabled!', {
+                                                                        body: 'You will now receive browser notifications for new alerts.',
+                                                                        icon: '/favicon.ico',
+                                                                        tag: 'notification-enabled'
+                                                                    });
+                                                                    
+                                                                    testNotification.onclick = () => {
+                                                                        window.focus();
+                                                                        testNotification.close();
+                                                                    };
+                                                                    
+                                                                    // Auto-close after 3 seconds
+                                                                    setTimeout(() => {
+                                                                        testNotification.close();
+                                                                    }, 3000);
+                                                                } catch (notifError) {
+                                                                    console.error('Error showing test notification:', notifError);
+                                                                }
+                                                            } else if (permission === 'denied') {
+                                                                alert('Notifications were denied. Please enable them in your browser settings.');
+                                                            } else {
+                                                                console.log('[Notifications] Permission status:', permission);
+                                                            }
+                                                        } catch (error) {
+                                                            console.error('Error enabling notifications:', error);
+                                                            alert('Error enabling notifications. Please check your browser settings.');
+                                                        }
+                                                    }}
+                                                    style={{
+                                                        fontSize: '11px',
+                                                        color: '#92400e',
+                                                        background: 'white',
+                                                        border: '1px solid #fbbf24',
+                                                        borderRadius: '4px',
+                                                        cursor: 'pointer',
+                                                        padding: '4px 8px',
+                                                        fontWeight: '500',
+                                                        transition: 'all 0.2s'
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        e.currentTarget.style.background = '#fef3c7';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        e.currentTarget.style.background = 'white';
+                                                    }}
+                                                >
+                                                    Enable
+                                                </button>
+                                            </div>
                                         )}
                                     </div>
                                     <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
@@ -3653,6 +2950,13 @@ function MarketingDashboard() {
             </div>
 
             {/* Modals */}
+            {showCreateContactModal && (
+                <CreateContactModal
+                    onClose={() => setShowCreateContactModal(false)}
+                    onCreate={handleCreateContact}
+                />
+            )}
+
             {showUploadModal && (
                 <ContactUploadModal
                     onClose={() => setShowUploadModal(false)}
@@ -3678,6 +2982,31 @@ function MarketingDashboard() {
                     certificateTemplate={certificateTemplate}
                 />
             )}
+
+            {showCampaignDetailsModal && (
+                <CampaignDetailsModal
+                    campaign={selectedCampaign}
+                    onClose={() => {
+                        setShowCampaignDetailsModal(false);
+                        setSelectedCampaign(null);
+                    }}
+                />
+            )}
+
+            {/* Message Sending Loader */}
+            <MessageSendingLoader
+                isVisible={showSendingLoader}
+                onClose={() => {
+                    setIsBackgroundMode(true);
+                    setShowSendingLoader(false);
+                }}
+                totalMessages={sendingProgress.totalMessages}
+                sentMessages={sendingProgress.sentMessages}
+                failedMessages={sendingProgress.failedMessages}
+                onSendInBackground={handleSendInBackground}
+                isBackgroundMode={isBackgroundMode}
+                jobId={currentJobId}
+            />
         </div>
     );
 }

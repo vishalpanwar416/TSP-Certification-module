@@ -6831,6 +6831,60 @@ a:hover {
   flex-shrink: 0;
 }
 
+/* API Health Section */
+.api-health-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.api-health-card .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.health-overall-status {
+  transition: all var(--transition-base);
+}
+
+.health-services-grid {
+  animation: fadeIn 0.3s ease-in;
+}
+
+.health-service-card {
+  transition: all var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+.health-service-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.health-service-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: currentColor;
+  opacity: 0.3;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .platform-setting-details {
   display: flex;
   align-items: center;

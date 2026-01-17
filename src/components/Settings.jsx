@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
     Settings as SettingsIcon,
     Facebook,
@@ -17,6 +17,8 @@ import {
     RefreshCw
 } from 'lucide-react';
 import SettingsView from './social-media/SettingsView';
+import { healthAPI } from '../services/marketingService';
+import { formatDateTime } from './marketing-views/utils';
 
 function Settings() {
     const [loading, setLoading] = useState(false);
@@ -25,6 +27,9 @@ function Settings() {
     const [webhookSecret, setWebhookSecret] = useState('');
     const [webhookConnectionStatus, setWebhookConnectionStatus] = useState(null); // null, 'checking', 'connected', 'disconnected', 'error'
     const [webhookLastChecked, setWebhookLastChecked] = useState(null);
+    const [healthStatus, setHealthStatus] = useState(null);
+    const [healthLoading, setHealthLoading] = useState(false);
+    const [healthLastChecked, setHealthLastChecked] = useState(null);
 
     const platforms = [
         { id: 'facebook', name: 'Facebook', icon: Facebook, color: '#1877F2', connected: true, charLimit: 5000, optimalLength: 250 },
@@ -41,6 +46,67 @@ function Settings() {
         setWebhookUrl(`${baseUrl}/api/webhooks/social-media`);
         setWebhookSecret('whsec_' + Math.random().toString(36).substring(2, 15));
     }, []);
+
+    // Check API Health function
+    const checkAPIHealth = useCallback(async () => {
+        setHealthLoading(true);
+        try {
+            console.log('[API Health] Checking API health...');
+            const response = await healthAPI.checkHealth();
+            console.log('[API Health] Response:', response);
+            setHealthStatus(response.data || response);
+            setHealthLastChecked(new Date());
+        } catch (error) {
+            console.error('[API Health] Error checking API health:', error);
+            setHealthStatus({
+                overall: 'error',
+                error: error.message || 'Failed to check API health'
+            });
+            setHealthLastChecked(new Date());
+        } finally {
+            setHealthLoading(false);
+        }
+    }, []);
+
+    // Auto-check API health when Settings component mounts
+    useEffect(() => {
+        checkAPIHealth();
+    }, [checkAPIHealth]);
+
+    // Helper functions for API Health Status
+    const getStatusIcon = (status) => {
+        switch (status) {
+            case 'operational':
+            case 'healthy':
+                return <CheckCircle size={20} style={{ color: '#10b981' }} />;
+            case 'degraded':
+                return <AlertCircle size={20} style={{ color: '#f59e0b' }} />;
+            case 'error':
+            case 'unhealthy':
+                return <X size={20} style={{ color: '#ef4444' }} />;
+            case 'not_configured':
+                return <AlertCircle size={20} style={{ color: '#6b7280' }} />;
+            default:
+                return <Clock size={20} style={{ color: '#6b7280' }} />;
+        }
+    };
+
+    const getStatusColor = (status) => {
+        switch (status) {
+            case 'operational':
+            case 'healthy':
+                return '#10b981';
+            case 'degraded':
+                return '#f59e0b';
+            case 'error':
+            case 'unhealthy':
+                return '#ef4444';
+            case 'not_configured':
+                return '#6b7280';
+            default:
+                return '#6b7280';
+        }
+    };
 
     const checkWebhookConnection = async () => {
         setWebhookConnectionStatus('checking');
@@ -165,6 +231,216 @@ function Settings() {
             </div>
 
             <div className="settings-content">
+                {/* API Health Card */}
+                <div style={{ 
+                    marginBottom: '24px', 
+                    backgroundColor: '#ffffff', 
+                    border: '2px solid #d32f2f',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                    minHeight: '300px',
+                    padding: '24px'
+                }}>
+                    <div style={{ 
+                        marginBottom: '1.5rem',
+                        paddingBottom: '1.5rem',
+                        borderBottom: '2px solid #e5e7eb'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
+                            <div style={{ flex: 1, minWidth: '200px' }}>
+                                <h3 style={{ 
+                                    fontSize: '1.75rem', 
+                                    fontWeight: 700, 
+                                    color: '#111827', 
+                                    marginBottom: '0.5rem', 
+                                    display: 'flex', 
+                                    alignItems: 'center', 
+                                    gap: '0.75rem',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.5px'
+                                }}>
+                                    <Activity size={32} style={{ color: '#d32f2f' }} />
+                                    API Health Status
+                                </h3>
+                                <p style={{ fontSize: '1rem', color: '#6b7280', margin: 0, lineHeight: '1.5', fontWeight: 500 }}>
+                                    Monitor the health and status of all integrated APIs and services
+                                </p>
+                            </div>
+                            <button
+                                className="btn btn-outline"
+                                onClick={checkAPIHealth}
+                                disabled={healthLoading}
+                                style={{ minWidth: '120px' }}
+                            >
+                                {healthLoading ? (
+                                    <>
+                                        <RefreshCw size={18} className="spinning" />
+                                        <span>Checking...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCw size={18} />
+                                        <span>Refresh</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+
+                    {healthStatus && (
+                        <>
+                            {/* Overall Status */}
+                            <div style={{
+                                padding: '16px',
+                                borderRadius: '8px',
+                                backgroundColor: healthStatus.overall === 'healthy' ? 'rgba(16, 185, 129, 0.1)' :
+                                                healthStatus.overall === 'degraded' ? 'rgba(245, 158, 11, 0.1)' :
+                                                'rgba(239, 68, 68, 0.1)',
+                                border: `2px solid ${getStatusColor(healthStatus.overall)}`,
+                                marginBottom: '20px'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                    {getStatusIcon(healthStatus.overall)}
+                                    <div>
+                                        <div style={{ fontWeight: '600', fontSize: '1rem', color: '#111827' }}>
+                                            Overall Status: <span style={{ color: getStatusColor(healthStatus.overall), textTransform: 'capitalize' }}>
+                                                {healthStatus.overall}
+                                            </span>
+                                        </div>
+                                        {healthLastChecked && (
+                                            <div style={{ fontSize: '0.875rem', color: '#6b7280', marginTop: '4px' }}>
+                                                Last checked: {formatDateTime(healthLastChecked)}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Services Grid */}
+                            {healthStatus.services && Object.keys(healthStatus.services).length > 0 && (
+                                <div style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                                    gap: '16px'
+                                }}>
+                                    {Object.entries(healthStatus.services).map(([key, service]) => (
+                                        <div key={key} style={{
+                                            padding: '16px',
+                                            borderRadius: '8px',
+                                            border: `2px solid ${getStatusColor(service.status)}40`,
+                                            backgroundColor: service.status === 'operational' ? 'rgba(16, 185, 129, 0.05)' :
+                                                            service.status === 'degraded' ? 'rgba(245, 158, 11, 0.05)' :
+                                                            service.status === 'error' ? 'rgba(239, 68, 68, 0.05)' :
+                                                            'rgba(107, 114, 128, 0.05)'
+                                        }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                    <span style={{ fontWeight: '600', fontSize: '0.9375rem', color: '#111827' }}>
+                                                        {service.service || key.charAt(0).toUpperCase() + key.slice(1)}
+                                                    </span>
+                                                </div>
+                                                {getStatusIcon(service.status)}
+                                            </div>
+                                            
+                                            <div style={{ marginBottom: '8px' }}>
+                                                <div style={{ fontSize: '0.8125rem', color: '#6b7280', marginBottom: '4px' }}>Status</div>
+                                                <div style={{ 
+                                                    fontSize: '0.875rem', 
+                                                    fontWeight: '600',
+                                                    color: getStatusColor(service.status),
+                                                    textTransform: 'capitalize'
+                                                }}>
+                                                    {service.status.replace('_', ' ')}
+                                                </div>
+                                            </div>
+
+                                            {service.configured !== undefined && (
+                                                <div style={{ marginBottom: '8px' }}>
+                                                    <div style={{ fontSize: '0.8125rem', color: '#6b7280', marginBottom: '4px' }}>Configured</div>
+                                                    <div style={{ 
+                                                        fontSize: '0.875rem',
+                                                        color: service.configured ? '#10b981' : '#6b7280',
+                                                        fontWeight: '500'
+                                                    }}>
+                                                        {service.configured ? 'Yes' : 'No'}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {service.details && (
+                                                <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #e5e7eb' }}>
+                                                    <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                                                        {service.details.message || service.details.error || 'No details available'}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {service.error && (
+                                                <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #e5e7eb' }}>
+                                                    <div style={{ fontSize: '0.75rem', color: '#ef4444' }}>
+                                                        Error: {service.error}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {healthStatus.error && (
+                                <div style={{
+                                    marginTop: '16px',
+                                    padding: '12px',
+                                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                                    borderRadius: '8px',
+                                    border: '1px solid #ef4444',
+                                    color: '#ef4444'
+                                }}>
+                                    <strong>Error:</strong> {healthStatus.error}
+                                </div>
+                            )}
+                        </>
+                    )}
+
+                    {!healthStatus && !healthLoading && (
+                        <div style={{ 
+                            textAlign: 'center', 
+                            padding: '60px 40px', 
+                            color: '#6b7280',
+                            backgroundColor: '#f9fafb',
+                            borderRadius: '8px',
+                            border: '2px dashed #d1d5db'
+                        }}>
+                            <Activity size={48} style={{ marginBottom: '16px', opacity: 0.5, color: '#d32f2f' }} />
+                            <p style={{ margin: '8px 0', fontSize: '1.125rem', fontWeight: 600, color: '#111827' }}>API Health Check</p>
+                            <p style={{ margin: '4px 0', fontSize: '0.875rem', color: '#6b7280' }}>Click "Refresh" to check the health status of all integrated APIs and services</p>
+                            <button
+                                className="btn btn-primary"
+                                onClick={checkAPIHealth}
+                                style={{ marginTop: '20px' }}
+                            >
+                                <RefreshCw size={18} />
+                                Check API Health
+                            </button>
+                        </div>
+                    )}
+
+                    {healthLoading && (
+                        <div style={{ 
+                            textAlign: 'center', 
+                            padding: '60px 40px', 
+                            color: '#6b7280',
+                            backgroundColor: '#f9fafb',
+                            borderRadius: '8px',
+                            border: '2px dashed #d1d5db'
+                        }}>
+                            <Activity size={48} className="spinning" style={{ marginBottom: '16px', opacity: 0.5, color: '#d32f2f' }} />
+                            <p style={{ margin: '8px 0', fontSize: '1.125rem', fontWeight: 600, color: '#111827' }}>Checking API Health...</p>
+                            <p style={{ margin: '4px 0', fontSize: '0.875rem', color: '#6b7280' }}>Please wait while we check the status of all integrated APIs and services</p>
+                        </div>
+                    )}
+                </div>
+
                 <SettingsView
                     webhookConnectionStatus={webhookConnectionStatus}
                     webhookLastChecked={webhookLastChecked}

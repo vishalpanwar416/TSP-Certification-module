@@ -171,6 +171,16 @@ export const campaignsAPI = {
             method: 'DELETE',
         });
     },
+
+    /**
+     * Process overdue scheduled campaigns
+     * Manually triggers processing of campaigns that are past their scheduled time
+     */
+    async processOverdue() {
+        return apiRequest('/marketing/campaigns/process-overdue', {
+            method: 'POST',
+        });
+    },
 };
 
 /**
@@ -324,6 +334,18 @@ export const configAPI = {
     },
 };
 
+/**
+ * API Health Check API
+ */
+export const healthAPI = {
+    /**
+     * Get comprehensive health status of all APIs and services
+     */
+    async checkHealth() {
+        return apiRequest('/health/check');
+    },
+};
+
 // Export all APIs
 export default {
     contacts: contactsAPI,
@@ -332,4 +354,5 @@ export default {
     scheduled: scheduledAPI,
     stats: statsAPI,
     config: configAPI,
+    health: healthAPI,
 };

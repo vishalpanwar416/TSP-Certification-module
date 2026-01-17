@@ -1,0 +1,55 @@
+.background-jobs-notification {
+    position: relative;
+    display: inline-block;
+}
+
+.background-jobs-notification-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background-color: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: #374151;
+}
+
+.background-jobs-notification-btn:hover {
+    background-color: #e5e7eb;
+    border-color: #d1d5db;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.background-jobs-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background-color: #ef4444;
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 600;
+    min-width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    padding: 0 6px;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.1);
+    }
+}

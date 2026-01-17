@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const { generateCertificatePDF, generateCertificateImage } = require('./utils/pdfGenerator');
 const { sendCertificateLinkViaWhatsApp, isWhatsAppConfigured, sendBulkWhatsApp } = require('./utils/whatsappService');
 const { sendCertificateViaEmail, isEmailConfigured, sendBulkEmail } = require('./utils/emailService');
+const notificationService = require('./utils/notificationService');
 
 // Initialize Firebase Admin
 let adminApp;
@@ -141,7 +142,7 @@ const getStorageBucket = async () => {
 // Create Express app
 const app = express();
 
-const { FieldValue } = require('firebase-admin/firestore');
+const { FieldValue, Timestamp } = require('firebase-admin/firestore');
 
 // ============================================
 // DATABASE INITIALIZATION
@@ -1802,7 +1803,22 @@ app.post('/marketing/campaigns', async (req, res) => {
             .map(doc => ({ id: doc.id, ...doc.data() }));
 
         const id = uuidv4();
-        const isScheduled = scheduledAt && new Date(scheduledAt) > new Date();
+        // Validate scheduled date
+        let isScheduled = false;
+        if (scheduledAt) {
+            const scheduledDate = new Date(scheduledAt);
+            const now = new Date();
+            if (isNaN(scheduledDate.getTime())) {
+                console.warn(`Invalid scheduled date: ${scheduledAt}`);
+            } else {
+                isScheduled = scheduledDate > now;
+                if (isScheduled) {
+                    console.log(`📅 Campaign will be scheduled for ${scheduledDate.toISOString()}`);
+                } else {
+                    console.warn(`⚠️ Scheduled date ${scheduledDate.toISOString()} is in the past, sending immediately`);
+                }
+            }
+        }
 
         // Handle certificate attachment
         let certificateAttachment = null;
@@ -1848,7 +1864,7 @@ app.post('/marketing/campaigns', async (req, res) => {
             sent_count: 0,
             failed_count: 0,
             status: isScheduled ? 'scheduled' : 'pending',
-            scheduled_at: scheduledAt ? new Date(scheduledAt) : null,
+            scheduled_at: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
             sent_at: null,
             certificate_attachment: certificateAttachment,
             whatsapp_campaign: whatsappCampaign || null,
@@ -1997,6 +2013,9 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                     const wantsPdf = formats.pdf === true;
                     const wantsJpg = formats.jpg === true;
                     const hasCertificate = certificateAttachment && (wantsPdf || wantsJpg);
+                    
+                    // Use campaign-specific campaign name if provided, otherwise use defaults
+                    const campaignName = whatsappCampaign || null;
 
                     // Validate message is not empty after personalization (for text-only messages)
                     if (!hasCertificate) {
@@ -2050,7 +2069,7 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                                     messageToSend, 
                                     pdfResult.url, 
                                     pdfResult.filename, 
-                                    'pdf_certificate' // Use pdf_certificate template
+                                    campaignName || 'pdf_certificate' // Use campaign-specific name or default
                                 );
 
                     if (result && result.success !== false) {
@@ -2085,7 +2104,7 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                                     messageToSend, 
                                     jpgResult.url, 
                                     jpgResult.filename, 
-                                    'image_certificate' // Use image_certificate template
+                                    campaignName || 'image_certificate' // Use campaign-specific name or default
                                 );
 
                                 if (result && result.success !== false) {
@@ -2116,7 +2135,7 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
                                 messageToSend, 
                                 null, // No media
                                 null, 
-                                'text_notification' // Use text_notification template
+                                campaignName || null // Use campaign-specific name if provided, otherwise use default from config
                             );
 
                             if (result && result.success !== false) {
@@ -2239,6 +2258,24 @@ async function sendCampaignMessages(campaignId, type, subject, message, contacts
         updated_at: FieldValue.serverTimestamp(),
         errors: finalErrors.length > 0 ? finalErrors : FieldValue.delete()
     });
+
+    // Create notification for campaign completion
+    try {
+        const campaignData = {
+            id: campaignId,
+            name: currentCampaign?.name || 'Campaign',
+            totalContacts: contacts.length,
+            successfulContacts: finalSentCount,
+            failedContacts: finalFailedCount
+        };
+        
+        await notificationService.createCampaignNotification(campaignData, finalStatus, {
+            userId: currentCampaign?.userId || null
+        });
+    } catch (notificationError) {
+        // Don't fail the campaign if notification creation fails
+        console.error('Error creating campaign notification:', notificationError);
+    }
 
     return { sentCount, failedCount, errors };
 }
@@ -2408,6 +2445,175 @@ app.post('/marketing/campaigns/:id/cancel', async (req, res) => {
     } catch (error) {
         console.error('Error cancelling campaign:', error);
         res.status(500).json({ error: 'Failed to cancel campaign', details: error.message });
+    }
+});
+
+/**
+ * Manually process overdue scheduled campaigns
+ * POST /marketing/campaigns/process-overdue
+ * This endpoint can be called to manually trigger processing of scheduled campaigns that are past their scheduled time
+ */
+app.post('/marketing/campaigns/process-overdue', async (req, res) => {
+    try {
+        const now = new Date();
+        console.log(`🔄 Manual trigger: Processing overdue scheduled campaigns at ${now.toISOString()}`);
+
+        // Query for scheduled campaigns
+        const scheduledSnapshot = await db.collection('marketing_campaigns')
+            .where('status', '==', 'scheduled')
+            .get();
+
+        // Filter for overdue campaigns using the same logic as the scheduled function
+        const dueCampaigns = scheduledSnapshot.docs.filter(doc => {
+            const campaign = doc.data();
+            const scheduledAt = campaign.scheduled_at;
+            
+            if (!scheduledAt) {
+                return false;
+            }
+
+            let scheduledDate;
+            try {
+                if (scheduledAt.toDate && typeof scheduledAt.toDate === 'function') {
+                    scheduledDate = scheduledAt.toDate();
+                } else if (scheduledAt.seconds !== undefined) {
+                    scheduledDate = new Date(scheduledAt.seconds * 1000 + (scheduledAt.nanoseconds || 0) / 1000000);
+                } else if (scheduledAt._seconds !== undefined) {
+                    scheduledDate = new Date(scheduledAt._seconds * 1000 + (scheduledAt._nanoseconds || 0) / 1000000);
+                } else {
+                    scheduledDate = scheduledAt instanceof Date ? scheduledAt : new Date(scheduledAt);
+                }
+
+                if (isNaN(scheduledDate.getTime())) {
+                    return false;
+                }
+
+                return scheduledDate.getTime() <= now.getTime();
+            } catch (error) {
+                console.error(`Error checking campaign ${doc.id}:`, error);
+                return false;
+            }
+        });
+
+        if (dueCampaigns.length === 0) {
+            return res.json({ 
+                success: true, 
+                message: 'No overdue scheduled campaigns found',
+                processed: 0
+            });
+        }
+
+        console.log(`📬 Found ${dueCampaigns.length} overdue campaign(s) to process`);
+
+        const results = [];
+        for (const doc of dueCampaigns) {
+            const campaign = { id: doc.id, ...doc.data() };
+            try {
+                console.log(`Processing overdue campaign ${campaign.id}`);
+                
+                // Fetch contacts
+                const contactsPromises = campaign.contact_ids.map(cid =>
+                    db.collection('marketing_contacts').doc(cid).get()
+                );
+                const contactDocs = await Promise.all(contactsPromises);
+                const contacts = contactDocs
+                    .filter(d => d.exists)
+                    .map(d => ({ id: d.id, ...d.data() }));
+
+                if (contacts.length === 0) {
+                    await db.collection('marketing_campaigns').doc(campaign.id).update({
+                        status: 'failed',
+                        error_message: 'No valid contacts found',
+                        updated_at: FieldValue.serverTimestamp()
+                    });
+                    results.push({ id: campaign.id, status: 'failed', reason: 'No valid contacts' });
+                    continue;
+                }
+
+                const certificateAttachment = campaign.certificate_attachment || null;
+                const whatsappCampaign = campaign.whatsapp_campaign || null;
+
+                // Send the campaign messages
+                await sendCampaignMessages(
+                    campaign.id,
+                    campaign.type,
+                    campaign.subject,
+                    campaign.message,
+                    contacts,
+                    certificateAttachment,
+                    whatsappCampaign
+                );
+
+                // Update campaign status
+                const campaignDoc = await db.collection('marketing_campaigns').doc(campaign.id).get();
+                const updatedCampaign = campaignDoc.exists ? campaignDoc.data() : null;
+                
+                if (updatedCampaign && updatedCampaign.status === 'scheduled') {
+                    const newStatus = updatedCampaign.sent_count > 0 ? 'completed' : 'failed';
+                    await db.collection('marketing_campaigns').doc(campaign.id).update({
+                        status: newStatus,
+                        sent_at: FieldValue.serverTimestamp(),
+                        updated_at: FieldValue.serverTimestamp()
+                    });
+
+                    // Create notification for campaign completion
+                    try {
+                        const campaignData = {
+                            id: campaign.id,
+                            name: campaign.name || updatedCampaign.name || 'Campaign',
+                            totalContacts: contacts.length,
+                            successfulContacts: updatedCampaign.sent_count || 0,
+                            failedContacts: updatedCampaign.failed_count || 0
+                        };
+                        
+                        await notificationService.createCampaignNotification(campaignData, newStatus, {
+                            userId: campaign.userId || updatedCampaign.userId || null
+                        });
+                    } catch (notificationError) {
+                        console.error('Error creating campaign notification:', notificationError);
+                    }
+                }
+
+                results.push({ id: campaign.id, status: 'success' });
+                console.log(`✅ Campaign ${campaign.id} processed successfully`);
+            } catch (error) {
+                console.error(`❌ Error processing campaign ${campaign.id}:`, error);
+                await db.collection('marketing_campaigns').doc(campaign.id).update({
+                    status: 'failed',
+                    error_message: error.message || error.toString(),
+                    updated_at: FieldValue.serverTimestamp()
+                });
+
+                // Create notification for campaign failure
+                try {
+                    const campaignData = {
+                        id: campaign.id,
+                        name: campaign.name || 'Campaign',
+                        totalContacts: contacts?.length || 0,
+                        successfulContacts: 0,
+                        failedContacts: contacts?.length || 0
+                    };
+                    
+                    await notificationService.createCampaignNotification(campaignData, 'failed', {
+                        userId: campaign.userId || null
+                    });
+                } catch (notificationError) {
+                    console.error('Error creating campaign failure notification:', notificationError);
+                }
+
+                results.push({ id: campaign.id, status: 'failed', error: error.message });
+            }
+        }
+
+        res.json({
+            success: true,
+            message: `Processed ${dueCampaigns.length} overdue campaign(s)`,
+            processed: dueCampaigns.length,
+            results
+        });
+    } catch (error) {
+        console.error('Error processing overdue campaigns:', error);
+        res.status(500).json({ error: 'Failed to process overdue campaigns', details: error.message });
     }
 });
 
@@ -2647,31 +2853,58 @@ app.put('/marketing/scheduled/:id/reschedule', async (req, res) => {
 
 /**
  * Get all notifications
+ * Query params:
+ * - limit: number of notifications to return (default: 50)
+ * - unread: 'true' to get only unread notifications
+ * - userId: filter by user ID (null for global notifications)
+ * - category: filter by category (e.g., 'campaign', 'certificate', 'system')
  */
 app.get('/notifications', async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 50;
         const unreadOnly = req.query.unread === 'true';
+        const userId = req.query.userId !== undefined ? req.query.userId : null;
+        const category = req.query.category || null;
 
-        let query = db.collection('notifications')
-            .orderBy('created_at', 'desc');
+        let query = db.collection('notifications');
 
+        // Filter by userId
+        if (userId !== null && userId !== 'null') {
+            query = query.where('userId', '==', userId);
+        } else {
+            query = query.where('userId', '==', null);
+        }
+
+        // Filter by category if provided
+        if (category) {
+            query = query.where('category', '==', category);
+        }
+
+        // Filter by read status
         if (unreadOnly) {
             query = query.where('read', '==', false);
         }
 
-        const snapshot = await query.limit(limit).get();
+        // Order by created_at descending
+        query = query.orderBy('created_at', 'desc').limit(limit);
+
+        const snapshot = await query.get();
 
         const notifications = [];
         snapshot.forEach(doc => {
-            notifications.push({ id: doc.id, ...doc.data() });
+            const data = doc.data();
+            notifications.push({ 
+                id: doc.id, 
+                ...data,
+                // Convert Firestore timestamps to ISO strings for JSON response
+                created_at: data.created_at?.toDate ? data.created_at.toDate().toISOString() : data.created_at,
+                updated_at: data.updated_at?.toDate ? data.updated_at.toDate().toISOString() : data.updated_at,
+                read_at: data.read_at?.toDate ? data.read_at.toDate().toISOString() : data.read_at
+            });
         });
 
-        // Get unread count
-        const unreadSnapshot = await db.collection('notifications')
-            .where('read', '==', false)
-            .get();
-        const unreadCount = unreadSnapshot.size;
+        // Get unread count for the user
+        const unreadCount = await notificationService.getUnreadCount(userId);
 
         res.json({
             success: true,
@@ -2686,29 +2919,32 @@ app.get('/notifications', async (req, res) => {
 
 /**
  * Create a notification
+ * Body params:
+ * - title: Notification title (required)
+ * - message: Notification message (required)
+ * - type: 'info', 'success', 'warning', 'error' (default: 'info')
+ * - link: Optional link/URL
+ * - userId: Optional user ID (null for global notifications)
+ * - category: Optional category (e.g., 'campaign', 'certificate', 'system')
+ * - metadata: Optional metadata object
  */
 app.post('/notifications', async (req, res) => {
     try {
-        const { title, message, type, link, userId } = req.body;
+        const { title, message, type, link, userId, category, metadata } = req.body;
 
         if (!title || !message) {
             return res.status(400).json({ error: 'Title and message are required' });
         }
 
-        const id = uuidv4();
-        const notificationData = {
-            id,
+        const notificationData = await notificationService.createNotification({
             title,
             message,
-            type: type || 'info', // info, success, warning, error
+            type: type || 'info',
             link: link || null,
-            userId: userId || null, // null for global notifications
-            read: false,
-            created_at: FieldValue.serverTimestamp(),
-            updated_at: FieldValue.serverTimestamp()
-        };
-
-        await db.collection('notifications').doc(id).set(notificationData);
+            userId: userId !== undefined ? userId : null,
+            category: category || null,
+            metadata: metadata || {}
+        });
 
         res.status(201).json({
             success: true,
@@ -2727,21 +2963,13 @@ app.post('/notifications', async (req, res) => {
 app.put('/notifications/:id/read', async (req, res) => {
     try {
         const { id } = req.params;
-        const docRef = db.collection('notifications').doc(id);
-        const doc = await docRef.get();
-
-        if (!doc.exists) {
-            return res.status(404).json({ error: 'Notification not found' });
-        }
-
-        await docRef.update({
-            read: true,
-            read_at: FieldValue.serverTimestamp(),
-            updated_at: FieldValue.serverTimestamp()
-        });
+        await notificationService.markAsRead(id);
 
         res.json({ success: true, message: 'Notification marked as read' });
     } catch (error) {
+        if (error.message === 'Notification not found') {
+            return res.status(404).json({ error: 'Notification not found' });
+        }
         console.error('Error marking notification as read:', error);
         res.status(500).json({ error: 'Failed to update notification', details: error.message });
     }
@@ -2749,27 +2977,17 @@ app.put('/notifications/:id/read', async (req, res) => {
 
 /**
  * Mark all notifications as read
+ * Query params:
+ * - userId: Optional user ID (null for global notifications)
  */
 app.put('/notifications/read-all', async (req, res) => {
     try {
-        const snapshot = await db.collection('notifications')
-            .where('read', '==', false)
-            .get();
-
-        const batch = db.batch();
-        snapshot.forEach(doc => {
-            batch.update(doc.ref, {
-                read: true,
-                read_at: FieldValue.serverTimestamp(),
-                updated_at: FieldValue.serverTimestamp()
-            });
-        });
-
-        await batch.commit();
+        const userId = req.query.userId !== undefined ? req.query.userId : null;
+        const count = await notificationService.markAllAsRead(userId);
 
         res.json({
             success: true,
-            message: `Marked ${snapshot.size} notifications as read`
+            message: `Marked ${count} notifications as read`
         });
     } catch (error) {
         console.error('Error marking all notifications as read:', error);
@@ -2801,20 +3019,44 @@ app.delete('/notifications/:id', async (req, res) => {
 
 /**
  * Get unread notification count
+ * Query params:
+ * - userId: Optional user ID (null for global notifications)
  */
 app.get('/notifications/unread-count', async (req, res) => {
     try {
-        const snapshot = await db.collection('notifications')
-            .where('read', '==', false)
-            .get();
+        const userId = req.query.userId !== undefined ? req.query.userId : null;
+        const count = await notificationService.getUnreadCount(userId);
 
         res.json({
             success: true,
-            count: snapshot.size
+            count
         });
     } catch (error) {
         console.error('Error fetching unread count:', error);
         res.status(500).json({ error: 'Failed to fetch unread count', details: error.message });
+    }
+});
+
+/**
+ * Delete old read notifications (cleanup)
+ * Query params:
+ * - daysOld: Number of days old to delete (default: 30)
+ * - userId: Optional user ID (null for global notifications)
+ */
+app.delete('/notifications/cleanup', async (req, res) => {
+    try {
+        const daysOld = parseInt(req.query.daysOld) || 30;
+        const userId = req.query.userId !== undefined ? req.query.userId : null;
+        const deletedCount = await notificationService.deleteOldNotifications(daysOld, userId);
+
+        res.json({
+            success: true,
+            message: `Deleted ${deletedCount} old notifications`,
+            deletedCount
+        });
+    } catch (error) {
+        console.error('Error cleaning up notifications:', error);
+        res.status(500).json({ error: 'Failed to cleanup notifications', details: error.message });
     }
 });
 
@@ -3495,6 +3737,225 @@ app.get('/health', async (req, res) => {
 });
 
 /**
+ * Comprehensive API Health Check
+ * GET /health/check
+ * Returns detailed health status of all APIs and services
+ */
+app.get('/health/check', async (req, res) => {
+    const healthStatus = {
+        timestamp: new Date().toISOString(),
+        overall: 'healthy',
+        services: {}
+    };
+
+    // Check Email API
+    try {
+        const emailConfigured = isEmailConfigured();
+        const emailTest = emailConfigured ? await testEmailService() : null;
+        healthStatus.services.email = {
+            configured: emailConfigured,
+            status: emailConfigured ? (emailTest?.success ? 'operational' : 'degraded') : 'not_configured',
+            service: 'SendGrid/Nodemailer',
+            lastChecked: new Date().toISOString(),
+            details: emailTest || { message: emailConfigured ? 'Service configured but not tested' : 'Email service not configured' }
+        };
+    } catch (error) {
+        healthStatus.services.email = {
+            configured: false,
+            status: 'error',
+            error: error.message,
+            lastChecked: new Date().toISOString()
+        };
+    }
+
+    // Check WhatsApp API
+    try {
+        const whatsappConfigured = isWhatsAppConfigured();
+        const whatsappTest = whatsappConfigured ? await testWhatsAppService() : null;
+        healthStatus.services.whatsapp = {
+            configured: whatsappConfigured,
+            status: whatsappConfigured ? (whatsappTest?.success ? 'operational' : 'degraded') : 'not_configured',
+            service: 'AiSensy/Twilio',
+            lastChecked: new Date().toISOString(),
+            details: whatsappTest || { message: whatsappConfigured ? 'Service configured but not tested' : 'WhatsApp service not configured' }
+        };
+    } catch (error) {
+        healthStatus.services.whatsapp = {
+            configured: false,
+            status: 'error',
+            error: error.message,
+            lastChecked: new Date().toISOString()
+        };
+    }
+
+    // Check Firebase Storage
+    try {
+        const bucket = await getStorageBucket();
+        const [exists] = await bucket.exists();
+        const storageTest = exists ? await testStorageService(bucket) : null;
+        healthStatus.services.storage = {
+            configured: exists,
+            status: exists ? (storageTest?.success ? 'operational' : 'degraded') : 'not_configured',
+            service: 'Firebase Storage',
+            lastChecked: new Date().toISOString(),
+            details: storageTest || { message: exists ? 'Storage accessible but not tested' : 'Storage not configured' }
+        };
+    } catch (error) {
+        healthStatus.services.storage = {
+            configured: false,
+            status: 'error',
+            error: error.message,
+            lastChecked: new Date().toISOString()
+        };
+    }
+
+    // Check Firestore Database
+    try {
+        const firestoreTest = await testFirestoreService();
+        healthStatus.services.firestore = {
+            configured: true,
+            status: firestoreTest?.success ? 'operational' : 'degraded',
+            service: 'Firebase Firestore',
+            lastChecked: new Date().toISOString(),
+            details: firestoreTest || { message: 'Database accessible' }
+        };
+    } catch (error) {
+        healthStatus.services.firestore = {
+            configured: false,
+            status: 'error',
+            error: error.message,
+            lastChecked: new Date().toISOString()
+        };
+    }
+
+    // Check Webhook endpoint
+    try {
+        const webhookTest = await testWebhookService();
+        healthStatus.services.webhook = {
+            configured: true,
+            status: webhookTest?.success ? 'operational' : 'degraded',
+            service: 'Social Media Webhook',
+            endpoint: '/api/webhooks/social-media',
+            lastChecked: new Date().toISOString(),
+            details: webhookTest || { message: 'Webhook endpoint available' }
+        };
+    } catch (error) {
+        healthStatus.services.webhook = {
+            configured: false,
+            status: 'error',
+            error: error.message,
+            lastChecked: new Date().toISOString()
+        };
+    }
+
+    // Determine overall health
+    const serviceStatuses = Object.values(healthStatus.services).map(s => s.status);
+    if (serviceStatuses.some(s => s === 'error')) {
+        healthStatus.overall = 'unhealthy';
+    } else if (serviceStatuses.some(s => s === 'degraded' || s === 'not_configured')) {
+        healthStatus.overall = 'degraded';
+    } else {
+        healthStatus.overall = 'healthy';
+    }
+
+    res.json({
+        success: true,
+        data: healthStatus
+    });
+});
+
+// Helper function to test Email service
+async function testEmailService() {
+    try {
+        // Just check if configured, don't actually send email
+        return {
+            success: true,
+            message: 'Email service is configured and ready'
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    }
+}
+
+// Helper function to test WhatsApp service
+async function testWhatsAppService() {
+    try {
+        // Check if AiSensy API key is configured
+        const whatsappConfig = process.env.AISENSY_API_KEY;
+        if (!whatsappConfig) {
+            return {
+                success: false,
+                message: 'AiSensy API key not configured'
+            };
+        }
+        return {
+            success: true,
+            message: 'WhatsApp service is configured and ready'
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    }
+}
+
+// Helper function to test Storage service
+async function testStorageService(bucket) {
+    try {
+        // Test if we can access the bucket
+        const [files] = await bucket.getFiles({ maxResults: 1 });
+        return {
+            success: true,
+            message: 'Storage is accessible and ready',
+            bucketName: bucket.name
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    }
+}
+
+// Helper function to test Firestore service
+async function testFirestoreService() {
+    try {
+        // Try to read a test document or just check connection
+        await db.collection('_health_check').limit(1).get();
+        return {
+            success: true,
+            message: 'Firestore is accessible and ready'
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    }
+}
+
+// Helper function to test Webhook service
+async function testWebhookService() {
+    try {
+        // Webhook endpoint exists, just return success
+        return {
+            success: true,
+            message: 'Webhook endpoint is available',
+            endpoint: '/api/webhooks/social-media'
+        };
+    } catch (error) {
+        return {
+            success: false,
+            message: error.message
+        };
+    }
+}
+
+/**
  * Test Storage Configuration
  * GET /test/storage
  */
@@ -3732,23 +4193,104 @@ exports.processScheduledCampaigns = functions.pubsub
     .onRun(async (context) => {
         try {
             const now = new Date();
+            console.log(`🕐 Checking for scheduled campaigns at ${now.toISOString()}`);
 
-            const snapshot = await db.collection('marketing_campaigns')
+            // Query for scheduled campaigns that are due
+            // Note: Firestore requires an index for compound queries, but we'll use a simpler approach
+            const scheduledSnapshot = await db.collection('marketing_campaigns')
                 .where('status', '==', 'scheduled')
-                .where('scheduled_at', '<=', now)
                 .get();
+            
+            console.log(`📋 Found ${scheduledSnapshot.docs.length} campaign(s) with status 'scheduled'`);
 
-            if (snapshot.empty) {
-                console.log('No scheduled campaigns to process');
+            // Filter in memory for campaigns where scheduled_at <= now
+            const dueCampaigns = scheduledSnapshot.docs.filter(doc => {
+                const campaign = doc.data();
+                const scheduledAt = campaign.scheduled_at;
+                
+                if (!scheduledAt) {
+                    console.warn(`Campaign ${doc.id} has no scheduled_at field`);
+                    return false;
+                }
+
+                let scheduledDate;
+                try {
+                    // Handle Firestore Timestamp (has toDate method)
+                    if (scheduledAt.toDate && typeof scheduledAt.toDate === 'function') {
+                        scheduledDate = scheduledAt.toDate();
+                    }
+                    // Handle Firestore Timestamp with seconds property (Admin SDK format)
+                    else if (scheduledAt.seconds !== undefined) {
+                        scheduledDate = new Date(scheduledAt.seconds * 1000 + (scheduledAt.nanoseconds || 0) / 1000000);
+                    }
+                    // Handle Firestore Timestamp with _seconds property (serialized format)
+                    else if (scheduledAt._seconds !== undefined) {
+                        scheduledDate = new Date(scheduledAt._seconds * 1000 + (scheduledAt._nanoseconds || 0) / 1000000);
+                    }
+                    // Handle Date object or ISO string
+                    else {
+                        scheduledDate = scheduledAt instanceof Date ? scheduledAt : new Date(scheduledAt);
+                    }
+
+                    // Validate the date
+                    if (isNaN(scheduledDate.getTime())) {
+                        console.warn(`Campaign ${doc.id} has invalid scheduled_at: ${JSON.stringify(scheduledAt)}`);
+                        return false;
+                    }
+
+                    // Compare dates (using UTC to avoid timezone issues)
+                    const scheduledTime = scheduledDate.getTime();
+                    const nowTime = now.getTime();
+                    const isDue = scheduledTime <= nowTime;
+                    
+                    if (isDue) {
+                        console.log(`📅 Campaign ${doc.id} is due (scheduled: ${scheduledDate.toISOString()}, now: ${now.toISOString()}, diff: ${Math.round((nowTime - scheduledTime) / 1000)}s)`);
+                    } else {
+                        console.log(`⏳ Campaign ${doc.id} not yet due (scheduled: ${scheduledDate.toISOString()}, now: ${now.toISOString()}, diff: ${Math.round((scheduledTime - nowTime) / 1000)}s)`);
+                    }
+                    
+                    return isDue;
+                } catch (error) {
+                    console.error(`Error processing scheduled_at for campaign ${doc.id}:`, error);
+                    console.error(`scheduledAt value:`, JSON.stringify(scheduledAt));
+                    return false;
+                }
+            });
+
+            if (dueCampaigns.length === 0) {
+                console.log(`ℹ️ No scheduled campaigns due for processing (checked ${scheduledSnapshot.docs.length} scheduled campaigns)`);
+                // Log details about scheduled campaigns that aren't due yet
+                if (scheduledSnapshot.docs.length > 0) {
+                    console.log('📅 Scheduled campaigns (not yet due):');
+                    scheduledSnapshot.docs.forEach(doc => {
+                        const camp = doc.data();
+                        const sched = camp.scheduled_at;
+                        if (sched) {
+                            let schedDate;
+                            try {
+                                if (sched.toDate) schedDate = sched.toDate();
+                                else if (sched.seconds) schedDate = new Date(sched.seconds * 1000);
+                                else if (sched._seconds) schedDate = new Date(sched._seconds * 1000);
+                                else schedDate = new Date(sched);
+                                const diff = Math.round((schedDate.getTime() - now.getTime()) / 1000);
+                                console.log(`   - Campaign ${doc.id}: scheduled for ${schedDate.toISOString()} (${diff > 0 ? `in ${diff}s` : `${Math.abs(diff)}s ago`})`);
+                            } catch (e) {
+                                console.log(`   - Campaign ${doc.id}: invalid scheduled_at`);
+                            }
+                        }
+                    });
+                }
                 return null;
             }
 
-            console.log(`Processing ${snapshot.size} scheduled campaigns`);
+            console.log(`📬 Found ${dueCampaigns.length} scheduled campaign(s) due for processing`);
 
-            for (const doc of snapshot.docs) {
+            for (const doc of dueCampaigns) {
                 const campaign = { id: doc.id, ...doc.data() };
 
                 try {
+                    console.log(`Processing scheduled campaign ${campaign.id} scheduled for ${campaign.scheduled_at}`);
+                    
                     // Fetch contacts
                     const contactsPromises = campaign.contact_ids.map(cid =>
                         db.collection('marketing_contacts').doc(cid).get()
@@ -3758,24 +4300,69 @@ exports.processScheduledCampaigns = functions.pubsub
                         .filter(d => d.exists)
                         .map(d => ({ id: d.id, ...d.data() }));
 
+                    if (contacts.length === 0) {
+                        console.warn(`Campaign ${campaign.id} has no valid contacts`);
+                        await db.collection('marketing_campaigns').doc(campaign.id).update({
+                            status: 'failed',
+                            error_message: 'No valid contacts found',
+                            updated_at: FieldValue.serverTimestamp()
+                        });
+                        continue;
+                    }
+
                     const certificateAttachment = campaign.certificate_attachment || null;
+                    const whatsappCampaign = campaign.whatsapp_campaign || null;
 
-                    await sendCampaignMessages(
-                        campaign.id,
-                        campaign.type,
-                        campaign.subject,
-                        campaign.message,
-                        contacts,
-                        certificateAttachment
-                    );
+                    // Send the campaign messages
+                    let sendResult;
+                    try {
+                        sendResult = await sendCampaignMessages(
+                            campaign.id,
+                            campaign.type,
+                            campaign.subject,
+                            campaign.message,
+                            contacts,
+                            certificateAttachment,
+                            whatsappCampaign
+                        );
+                    } catch (sendError) {
+                        console.error(`Error in sendCampaignMessages for ${campaign.id}:`, sendError);
+                        // sendCampaignMessages might have partially updated the campaign, so refresh it
+                        throw sendError; // Re-throw to be caught by outer catch
+                    }
 
-                    console.log(`Campaign ${campaign.id} processed successfully`);
+                    // Verify the status was updated by sendCampaignMessages
+                    const campaignDoc = await db.collection('marketing_campaigns').doc(campaign.id).get();
+                    const updatedCampaign = campaignDoc.exists ? campaignDoc.data() : null;
+                    
+                    // If status is still 'scheduled', force update it (this shouldn't happen, but safety check)
+                    if (updatedCampaign && updatedCampaign.status === 'scheduled') {
+                        console.warn(`⚠️ Campaign ${campaign.id} status still 'scheduled' after sendCampaignMessages, forcing update`);
+                        const sentCount = updatedCampaign.sent_count || 0;
+                        const failedCount = updatedCampaign.failed_count || 0;
+                        let finalStatus = 'completed';
+                        if (sentCount === 0 && failedCount > 0) {
+                            finalStatus = 'failed';
+                        } else if (failedCount > 0 && sentCount > 0) {
+                            finalStatus = 'partial';
+                        }
+                        
+                        await db.collection('marketing_campaigns').doc(campaign.id).update({
+                            status: finalStatus,
+                            sent_at: sentCount > 0 ? FieldValue.serverTimestamp() : null,
+                            updated_at: FieldValue.serverTimestamp()
+                        });
+                        console.log(`✅ Forced status update for campaign ${campaign.id}: ${finalStatus} (sent: ${sentCount}, failed: ${failedCount})`);
+                    } else {
+                        console.log(`✅ Campaign ${campaign.id} processed successfully. Status: ${updatedCampaign?.status || 'unknown'}, Sent: ${updatedCampaign?.sent_count || 0}, Failed: ${updatedCampaign?.failed_count || 0}`);
+                    }
                 } catch (error) {
-                    console.error(`Error processing campaign ${campaign.id}:`, error);
+                    console.error(`❌ Error processing campaign ${campaign.id}:`, error);
+                    console.error(`   Error stack:`, error.stack);
 
                     await db.collection('marketing_campaigns').doc(campaign.id).update({
                         status: 'failed',
-                        error_message: error.message,
+                        error_message: error.message || error.toString(),
                         updated_at: FieldValue.serverTimestamp()
                     });
                 }

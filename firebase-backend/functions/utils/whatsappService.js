@@ -253,7 +253,14 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
 
         const responseText = await response.text();
         console.log('AiSensy Response Status:', response.status);
-        console.log('AiSensy Response:', responseText);
+        console.log('AiSensy Response (raw):', responseText);
+        
+        // Log response for debugging "healthy ecosystem" errors
+        if (responseText.toLowerCase().includes('healthy ecosystem') || 
+            responseText.toLowerCase().includes('not delivered to maintain')) {
+            console.error('⚠️ WARNING: Response contains "healthy ecosystem" error message!');
+            console.error('   Full response:', responseText);
+        }
 
         let data;
         try {
@@ -262,12 +269,22 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
             throw new Error(`Invalid JSON response: ${responseText}`);
         }
 
+        // CRITICAL: Check for error messages in response even if HTTP status is OK
+        // AiSensy sometimes returns 200 OK but with error messages in the response body
+        const responseMessage = data.message || data.error || data.errorMessage || data.msg || '';
+        const responseMessageLower = responseMessage.toLowerCase();
+        const hasHealthyEcosystemError = responseMessage.includes('healthy ecosystem') || 
+                                        responseMessage.includes('not delivered to maintain') ||
+                                        responseMessageLower.includes('not delivered') ||
+                                        responseMessageLower.includes('ecosystem engagement') ||
+                                        responseMessageLower.includes('maintain healthy');
+
         if (!response.ok) {
             console.error('AiSensy API Error Response:', data);
-            const errorMsg = data.message || data.error || data.errorMessage || JSON.stringify(data);
+            const errorMsg = responseMessage || JSON.stringify(data);
             
             // Provide helpful error messages for common issues
-            if (errorMsg.includes('healthy ecosystem') || errorMsg.includes('not delivered to maintain')) {
+            if (hasHealthyEcosystemError) {
                 const isRateLimit = errorMsg.toLowerCase().includes('rate') || 
                                    errorMsg.toLowerCase().includes('too many') ||
                                    errorMsg.toLowerCase().includes('recently');
@@ -275,7 +292,7 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
                 if (isRateLimit) {
                     throw new Error(`Rate limit: Too many messages sent to ${formattedNumber} recently. Please wait 15-30 minutes before trying again. This is normal when testing - production usage with different recipients should be fine.`);
                 } else {
-                    throw new Error(`Phone number ${formattedNumber} is not opted-in or has restrictions. Please add/verify this number in your AiSensy dashboard and ensure it has opted-in to receive messages.`);
+                    throw new Error(`Message not delivered: ${formattedNumber} - ${errorMsg}. This number may not be opted-in, has restrictions, or is blocked to maintain healthy ecosystem engagement.`);
                 }
             }
             
@@ -288,23 +305,25 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
             throw new Error(`AiSensy API Error: ${errorMsg}`);
         }
 
-        // Check for success indicators
-        if (data.success === false || data.status === 'failed' || data.error) {
-            console.error('AiSensy API Error:', data);
-            const errorMsg = data.message || data.error || data.errorMessage || 'Failed to send AiSensy message';
+        // CRITICAL: Also check for error messages even when HTTP status is OK (200)
+        // AiSensy may return success: true but with an error message indicating failure
+        if (hasHealthyEcosystemError) {
+            console.error('❌ AiSensy returned HTTP 200 but with error message:', responseMessage);
+            const isRateLimit = responseMessageLower.includes('rate') || 
+                               responseMessageLower.includes('too many') ||
+                               responseMessageLower.includes('recently');
             
-            // Provide helpful error messages for common issues
-            if (errorMsg.includes('healthy ecosystem') || errorMsg.includes('not delivered to maintain')) {
-                const isRateLimit = errorMsg.toLowerCase().includes('rate') || 
-                                   errorMsg.toLowerCase().includes('too many') ||
-                                   errorMsg.toLowerCase().includes('recently');
-                
-                if (isRateLimit) {
-                    throw new Error(`Rate limit: Too many messages sent to ${formattedNumber} recently. Please wait 15-30 minutes before trying again. This is normal when testing - production usage with different recipients should be fine.`);
-                } else {
-                    throw new Error(`Phone number ${formattedNumber} is not opted-in or has restrictions. Please add/verify this number in your AiSensy dashboard and ensure it has opted-in to receive messages.`);
-                }
+            if (isRateLimit) {
+                throw new Error(`Rate limit: Too many messages sent to ${formattedNumber} recently. Please wait 15-30 minutes before trying again. This is normal when testing - production usage with different recipients should be fine.`);
+            } else {
+                throw new Error(`Message not delivered: ${formattedNumber} - ${responseMessage}. This number may not be opted-in, has restrictions, or is blocked to maintain healthy ecosystem engagement. Please verify this number in your AiSensy dashboard.`);
             }
+        }
+        
+        // Check for success indicators - also check if success is explicitly false
+        if (data.success === false || data.status === 'failed' || data.error) {
+            console.error('AiSensy API Error (success=false):', data);
+            const errorMsg = responseMessage || data.error || data.errorMessage || 'Failed to send AiSensy message';
             
             // Handle template parameter mismatch
             if (errorMsg.includes('does not match') || errorMsg.includes('template params') || errorMsg.includes('parameter')) {
@@ -317,14 +336,56 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
 
         // Additional validation: Check if response indicates the message was actually queued/sent
         // Some AiSensy responses might have status fields that indicate pending/failed states
-        if (data.status && ['pending', 'queued', 'sent', 'delivered'].includes(data.status.toLowerCase())) {
-            console.log(`✅ AiSensy message ${data.status} to ${formattedNumber}`);
-        } else if (data.messageId || data.id || data.success === true || response.ok) {
-            // If we have a message ID or success flag, consider it sent
-            console.log(`✅ AiSensy message sent to ${formattedNumber}${data.messageId ? ` (ID: ${data.messageId})` : ''}`);
+        // CRITICAL: Double-check for error messages even after initial validation
+        // Check all possible message fields in the response
+        const allMessages = [
+            data.message,
+            data.error,
+            data.errorMessage,
+            data.msg,
+            data.response?.message,
+            data.response?.error,
+            JSON.stringify(data).toLowerCase()
+        ].filter(Boolean).join(' ').toLowerCase();
+        
+        const finalHasError = allMessages.includes('healthy ecosystem') || 
+                             allMessages.includes('not delivered to maintain') ||
+                             allMessages.includes('not delivered') ||
+                             allMessages.includes('ecosystem engagement') ||
+                             allMessages.includes('maintain healthy') ||
+                             (data.status && data.status.toLowerCase() === 'failed');
+        
+        if (finalHasError) {
+            const errorMsg = responseMessage || data.error || data.errorMessage || 'Message not delivered - healthy ecosystem restriction';
+            console.error(`❌ AiSensy response contains error message (even with success flag): ${errorMsg}`);
+            console.error(`   Full response data:`, JSON.stringify(data, null, 2));
+            throw new Error(`Message not delivered: ${formattedNumber} - ${errorMsg}. This number may not be opted-in, has restrictions, or is blocked to maintain healthy ecosystem engagement.`);
+        }
+        
+        // Final validation: Only return success if we have clear indicators
+        // Check for success field (can be boolean true or string "true")
+        const successValue = data.success === true || data.success === "true" || data.success === "True";
+        
+        // Check for various success indicators
+        const hasSuccessIndicator = data.messageId || 
+                                   data.id || 
+                                   data.submitted_message_id ||  // AiSensy sometimes returns this
+                                   (data.status && ['pending', 'queued', 'sent', 'delivered'].includes(data.status.toLowerCase())) ||
+                                   (successValue && !responseMessage); // Only if success is true AND no error message
+        
+        if (hasSuccessIndicator) {
+            if (data.status && ['pending', 'queued', 'sent', 'delivered'].includes(data.status.toLowerCase())) {
+                console.log(`✅ AiSensy message ${data.status} to ${formattedNumber}`);
+            } else if (data.submitted_message_id) {
+                console.log(`✅ AiSensy message submitted to ${formattedNumber} (ID: ${data.submitted_message_id})`);
+            } else {
+                console.log(`✅ AiSensy message sent to ${formattedNumber}${data.messageId ? ` (ID: ${data.messageId})` : data.id ? ` (ID: ${data.id})` : ''}`);
+            }
         } else {
             // Log warning if response doesn't clearly indicate success
-            console.warn(`⚠️ AiSensy response unclear for ${formattedNumber}:`, data);
+            console.warn(`⚠️ AiSensy response unclear for ${formattedNumber}:`, JSON.stringify(data, null, 2));
+            // If we can't determine success, treat as failure to be safe
+            throw new Error(`Unclear response from AiSensy for ${formattedNumber}. Response: ${JSON.stringify(data)}`);
         }
 
         return {
@@ -333,7 +394,7 @@ const sendAiSensyMessage = async (recipientNumber, message, mediaUrl = null, fil
             to: formattedNumber,
             api: 'aisensy',
             data: data,
-            messageId: data.messageId || data.id
+            messageId: data.messageId || data.id || data.submitted_message_id
         };
     } catch (error) {
         console.error('Error sending AiSensy message:', error);
